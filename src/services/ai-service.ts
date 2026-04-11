@@ -20,6 +20,40 @@ interface AskOptions {
 
 const UNCENSORED_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
 const OPENROUTER_FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+const GEMINI_TTS_DEFAULT_MODEL = "gemini-2.5-flash-preview-tts";
+const GEMINI_TTS_DEFAULT_VOICE = "Kore";
+const GEMINI_PREBUILT_VOICES = [
+  "Zephyr",
+  "Puck",
+  "Charon",
+  "Kore",
+  "Fenrir",
+  "Leda",
+  "Orus",
+  "Aoede",
+  "Callirrhoe",
+  "Autonoe",
+  "Enceladus",
+  "Iapetus",
+  "Umbriel",
+  "Algieba",
+  "Despina",
+  "Erinome",
+  "Algenib",
+  "Rasalgethi",
+  "Laomedeia",
+  "Achernar",
+  "Alnilam",
+  "Schedar",
+  "Gacrux",
+  "Pulcherrima",
+  "Achird",
+  "Zubenelgenubi",
+  "Vindemiatrix",
+  "Sadachbia",
+  "Sadaltager",
+  "Sulafat"
+] as const;
 const NAMI_FIXED_PERSONALITY_PROMPT = [
   "You are Nami, inspired by Nami from One Piece: clever, confident, practical, sharp, and warm with trusted friends.",
   "Speak naturally and confidently. Be clear, helpful, and direct. Keep replies readable for Discord.",
@@ -45,10 +79,26 @@ interface RouterMessage {
 
 type InstantTopic = { Text?: string; FirstURL?: string };
 type TopicGroup = { Topics?: InstantTopic[] };
+type GeminiInlineData = {
+  mimeType?: string;
+  data?: string;
+};
+
+type GeminiGenerateContentResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        inlineData?: GeminiInlineData;
+      }>;
+    };
+  }>;
+};
 
 export class AiService {
   private elevenLabsTtsAvailable: boolean;
   private elevenLabsDisableReason: string | undefined;
+  private geminiTtsAvailable: boolean;
+  private geminiDisableReason: string | undefined;
   private ttsRequestCountThisSession = 0;
   private ttsQueuePromise: Promise<void> = Promise.resolve();
   private readonly config: AppConfig;
@@ -62,17 +112,53 @@ export class AiService {
   constructor(config: AppConfig) {
     this.config = config;
     this.activeElevenLabsApiKey = config.elevenLabsApiKey;
-    this.elevenLabsTtsAvailable = true;
+    this.elevenLabsTtsAvailable = Boolean(config.elevenLabsApiKey);
+    this.elevenLabsDisableReason = config.elevenLabsApiKey
+      ? undefined
+      : "ELEVENLABS_API_KEY is not configured.";
+
+    this.geminiTtsAvailable = Boolean(config.geminiApiKey);
+    this.geminiDisableReason = config.geminiApiKey
+      ? undefined
+      : "GEMINI_API_KEY is not configured.";
   }
 
   isElevenLabsTtsAvailable(): boolean {
-    return this.elevenLabsTtsAvailable;
+    return this.elevenLabsTtsAvailable && Boolean(this.activeElevenLabsApiKey);
+  }
+
+  isTtsAvailable(): boolean {
+    return this.isElevenLabsTtsAvailable() || this.canUseGeminiTts();
+  }
+
+  getTtsUnavailableReason(): string | undefined {
+    if (this.isTtsAvailable()) {
+      return undefined;
+    }
+
+    const reasons = [this.elevenLabsDisableReason, this.geminiDisableReason]
+      .filter((value): value is string => Boolean(value && value.trim()));
+    if (reasons.length > 0) {
+      return reasons.join(" ");
+    }
+
+    return "No TTS provider is currently available.";
   }
 
   disableElevenLabsTts(reason: string): void {
     this.elevenLabsTtsAvailable = false;
     this.elevenLabsDisableReason = reason;
     console.warn(`[ElevenLabs] TTS disabled: ${reason}`);
+  }
+
+  private disableGeminiTts(reason: string): void {
+    this.geminiTtsAvailable = false;
+    this.geminiDisableReason = reason;
+    console.warn(`[GeminiTTS] disabled: ${reason}`);
+  }
+
+  private canUseGeminiTts(): boolean {
+    return this.geminiTtsAvailable && Boolean(this.config.geminiApiKey);
   }
 
   getTtsRequestCount(): number {
@@ -180,13 +266,33 @@ export class AiService {
   }
 
   private async performSynthesizeSpeech(options: SpeechOptions): Promise<string> {
-    if (!this.activeElevenLabsApiKey) {
-      throw new Error("ELEVENLABS_API_KEY is missing, so speech generation is unavailable.");
-    }
-    if (!this.elevenLabsTtsAvailable) {
-      throw new Error(this.elevenLabsDisableReason ?? "ElevenLabs TTS is currently disabled for this bot session.");
+    let elevenLabsError: Error | undefined;
+
+    if (this.isElevenLabsTtsAvailable()) {
+      try {
+        return await this.synthesizeWithElevenLabs(options);
+      } catch (error) {
+        const mapped = error instanceof Error ? error : new Error(String(error));
+        elevenLabsError = mapped;
+        if (!this.canUseGeminiTts()) {
+          throw mapped;
+        }
+        console.warn(`[TTS] ElevenLabs failed, falling back to Gemini TTS: ${mapped.message}`);
+      }
     }
 
+    if (this.canUseGeminiTts()) {
+      return this.synthesizeWithGemini(options);
+    }
+
+    if (elevenLabsError) {
+      throw elevenLabsError;
+    }
+
+    throw new Error(this.getTtsUnavailableReason() ?? "No TTS provider is currently available.");
+  }
+
+  private async synthesizeWithElevenLabs(options: SpeechOptions): Promise<string> {
     const voiceId =
       options.voice && options.voice !== "default"
         ? options.voice
@@ -198,7 +304,7 @@ export class AiService {
     } catch (error) {
       const mapped = this.mapSpeechError(error, voiceId);
       const status = this.getStatusCode(error);
-      if (status === 401 || status === 402) {
+      if (status === 401 || status === 402 || status === 403) {
         this.disableElevenLabsTts(mapped.message);
       }
       throw mapped;
@@ -220,8 +326,157 @@ export class AiService {
     return filePath;
   }
 
+  private async synthesizeWithGemini(options: SpeechOptions): Promise<string> {
+    if (!this.config.geminiApiKey) {
+      throw new Error("GEMINI_API_KEY is missing, so Gemini speech generation is unavailable.");
+    }
+
+    const requestedVoice = this.resolveGeminiVoice(options.voice);
+
+    try {
+      return await this.requestGeminiSpeech(options.text, options.userId, requestedVoice);
+    } catch (error) {
+      const status = this.getStatusCode(error);
+      if (status === 400 && requestedVoice !== (this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE)) {
+        console.warn(`[GeminiTTS] Voice '${requestedVoice}' rejected. Retrying with default voice.`);
+        return this.requestGeminiSpeech(options.text, options.userId, this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE);
+      }
+
+      const mapped = this.mapGeminiSpeechError(error, requestedVoice);
+      if (status === 401 || status === 403) {
+        this.disableGeminiTts(mapped.message);
+      }
+      throw mapped;
+    }
+  }
+
+  private async requestGeminiSpeech(text: string, userId: string, voiceName: string): Promise<string> {
+    if (!this.config.geminiApiKey) {
+      throw new Error("GEMINI_API_KEY is missing, so Gemini speech generation is unavailable.");
+    }
+
+    const model = this.config.geminiTtsModel || GEMINI_TTS_DEFAULT_MODEL;
+    this.ttsRequestCountThisSession += 1;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": this.config.geminiApiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: text.slice(0, 3000)
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName
+              }
+            }
+          }
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      const error = new Error(`Gemini TTS API error (${response.status}): ${errorText}`);
+      (error as { statusCode?: number; body?: unknown }).statusCode = response.status;
+      (error as { statusCode?: number; body?: unknown }).body = errorText;
+      throw error;
+    }
+
+    const payload = (await response.json()) as GeminiGenerateContentResponse;
+    const inlineData = payload.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
+    const encodedAudio = inlineData?.data;
+    const mimeType = inlineData?.mimeType ?? "audio/L16;rate=24000";
+
+    if (!encodedAudio) {
+      throw new Error(`Gemini TTS returned no audio payload for voice '${voiceName}'.`);
+    }
+
+    const rawAudio = Buffer.from(encodedAudio, "base64");
+    const mimeTypeLower = mimeType.toLowerCase();
+    let fileBuffer: Buffer;
+    let extension: "mp3" | "wav";
+
+    if (mimeTypeLower.includes("audio/mpeg") || mimeTypeLower.includes("audio/mp3")) {
+      fileBuffer = rawAudio;
+      extension = "mp3";
+    } else if (mimeTypeLower.includes("audio/wav") || mimeTypeLower.includes("audio/wave")) {
+      fileBuffer = rawAudio;
+      extension = "wav";
+    } else {
+      const sampleRateMatch = mimeTypeLower.match(/rate=(\d+)/);
+      const channelsMatch = mimeTypeLower.match(/channels=(\d+)/);
+      const sampleRate = sampleRateMatch ? Number(sampleRateMatch[1]) : 24_000;
+      const channels = channelsMatch ? Number(channelsMatch[1]) : 1;
+      fileBuffer = this.createWavFromPcm16(rawAudio, sampleRate, channels);
+      extension = "wav";
+    }
+
+    const filePath = path.join(AUDIO_DIR, `${Date.now()}-${userId}-gemini-${voiceName.toLowerCase()}.${extension}`);
+    await fs.writeFile(filePath, fileBuffer);
+    return filePath;
+  }
+
+  private createWavFromPcm16(pcmData: Buffer, sampleRate: number, channels: number): Buffer {
+    const bytesPerSample = 2;
+    const blockAlign = channels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const header = Buffer.alloc(44);
+
+    header.write("RIFF", 0);
+    header.writeUInt32LE(36 + pcmData.length, 4);
+    header.write("WAVE", 8);
+    header.write("fmt ", 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(channels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(16, 34);
+    header.write("data", 36);
+    header.writeUInt32LE(pcmData.length, 40);
+
+    return Buffer.concat([header, pcmData]);
+  }
+
+  private resolveGeminiVoice(preferredVoice: string): string {
+    const requested = preferredVoice?.trim();
+    const fallbackVoice = this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE;
+    if (!requested || requested === "default") {
+      return fallbackVoice;
+    }
+
+    const known = GEMINI_PREBUILT_VOICES.find((voice) => voice.toLowerCase() === requested.toLowerCase());
+    if (known) {
+      return known;
+    }
+
+    // Most ElevenLabs voice IDs are not valid Gemini voice names, so fall back safely.
+    if (/^[a-z]+$/i.test(requested)) {
+      return requested;
+    }
+
+    return fallbackVoice;
+  }
+
   async runElevenLabsStartupCheck(): Promise<string> {
     if (!this.activeElevenLabsApiKey) {
+      this.elevenLabsTtsAvailable = false;
+      this.elevenLabsDisableReason = "ELEVENLABS_API_KEY is not configured.";
       return "ElevenLabs startup check skipped (ELEVENLABS_API_KEY missing).";
     }
 
@@ -352,7 +607,10 @@ export class AiService {
 
   async listVoices(): Promise<Array<{ id: string; name: string; category: string }>> {
     if (!this.activeElevenLabsApiKey) {
-      throw new Error("ELEVENLABS_API_KEY is missing, so voice lookup is unavailable.");
+      if (this.canUseGeminiTts()) {
+        return this.listGeminiVoices();
+      }
+      throw new Error("No TTS voice provider is configured. Set ELEVENLABS_API_KEY or GEMINI_API_KEY.");
     }
 
     // Return cached voices if still valid
@@ -389,13 +647,33 @@ export class AiService {
     } catch (error) {
       const status = this.getStatusCode(error);
       if (status === 401) {
+        if (this.canUseGeminiTts()) {
+          console.warn("[Voices] ElevenLabs voice lookup failed (401). Returning Gemini voice list instead.");
+          return this.listGeminiVoices();
+        }
         throw new Error("ElevenLabs voice lookup failed (401 Unauthorized). Your ELEVENLABS_API_KEY is invalid, expired, or not permitted.");
       }
       if (status === 402) {
+        if (this.canUseGeminiTts()) {
+          console.warn("[Voices] ElevenLabs voice lookup failed (402). Returning Gemini voice list instead.");
+          return this.listGeminiVoices();
+        }
         throw new Error("ElevenLabs voice lookup failed (402 Payment Required). Your account has no remaining credits or your plan does not allow this request.");
+      }
+      if (this.canUseGeminiTts()) {
+        console.warn(`[Voices] ElevenLabs voice lookup failed (${status ?? "unknown"}). Returning Gemini voice list instead.`);
+        return this.listGeminiVoices();
       }
       throw new Error(`ElevenLabs voice lookup failed with status ${status ?? "unknown"}.`);
     }
+  }
+
+  private listGeminiVoices(): Array<{ id: string; name: string; category: string }> {
+    return GEMINI_PREBUILT_VOICES.map((voiceName) => ({
+      id: voiceName,
+      name: voiceName,
+      category: "gemini-tts"
+    }));
   }
 
   private getStatusCode(error: unknown): number | undefined {
@@ -453,14 +731,64 @@ export class AiService {
     return new Error(`ElevenLabs speech request failed with status ${status ?? "unknown"}.`);
   }
 
+  private mapGeminiSpeechError(error: unknown, requestedVoice: string): Error {
+    const status = this.getStatusCode(error);
+    const detail = this.getGeminiErrorDetail(error);
+
+    if (status === 400) {
+      return new Error(`Gemini speech request failed (400 Bad Request). ${detail ?? `Voice '${requestedVoice}' may be invalid for Gemini TTS.`}`);
+    }
+    if (status === 401) {
+      return new Error(`Gemini speech request failed (401 Unauthorized). ${detail ?? "Check GEMINI_API_KEY."}`);
+    }
+    if (status === 403) {
+      return new Error(`Gemini speech request failed (403 Forbidden). ${detail ?? "Your API key does not have access to this Gemini TTS model."}`);
+    }
+    if (status === 429) {
+      return new Error(`Gemini speech request failed (429 Rate Limited). ${detail ?? "Retry shortly or use a different key/project with more quota."}`);
+    }
+    if (status && status >= 500) {
+      return new Error(`Gemini speech request failed (${status}). ${detail ?? "Provider side error. Retry shortly."}`);
+    }
+
+    return new Error(`Gemini speech request failed with status ${status ?? "unknown"}. ${detail ?? ""}`.trim());
+  }
+
+  private getGeminiErrorDetail(error: unknown): string | undefined {
+    if (typeof error !== "object" || error === null) {
+      return undefined;
+    }
+
+    const body = (error as { body?: unknown }).body;
+    if (typeof body !== "string" || !body.trim()) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(body) as { error?: { message?: unknown } };
+      const message = parsed.error?.message;
+      if (typeof message === "string" && message.trim()) {
+        return message.trim();
+      }
+    } catch {
+      // Ignore parse failures and fall back to snippet.
+    }
+
+    return body.replace(/\s+/g, " ").trim().slice(0, 220);
+  }
+
   private async runOpenRouterChat(messages: RouterMessage[], userId: string, model: string): Promise<string> {
     if (!this.config.openRouterApiKey) {
       throw new Error("OPENROUTER_API_KEY is missing, so AI chat is unavailable.");
     }
 
-    const modelsToTry = model === OPENROUTER_FALLBACK_MODEL
-      ? [model]
-      : [model, OPENROUTER_FALLBACK_MODEL];
+    const shouldUseSmartFallback =
+      model !== UNCENSORED_MODEL &&
+      model !== OPENROUTER_FALLBACK_MODEL;
+
+    const modelsToTry = shouldUseSmartFallback
+      ? [model, OPENROUTER_FALLBACK_MODEL]
+      : [model];
 
     let lastError: Error | undefined;
     for (const candidateModel of modelsToTry) {

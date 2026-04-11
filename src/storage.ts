@@ -56,7 +56,9 @@ export class AppStorage {
   }
 
   private write(data: StorageShape): void {
-    fs.writeFileSync(STORAGE_FILE, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    const tempFile = `${STORAGE_FILE}.tmp`;
+    fs.writeFileSync(tempFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    fs.renameSync(tempFile, STORAGE_FILE);
   }
 
   getGuildSettings(guildId: string): GuildSettings {

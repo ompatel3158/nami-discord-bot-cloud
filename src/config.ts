@@ -46,6 +46,9 @@ export interface AppConfig {
   elevenLabsApiKeyFallback?: string;
   elevenLabsDefaultVoiceId: TtsVoice;
   elevenLabsModelId: string;
+  geminiApiKey?: string;
+  geminiTtsModel: string;
+  geminiTtsVoice: string;
 }
 
 function requiredEnv(name: string): string {
@@ -69,6 +72,9 @@ export function loadConfig(): AppConfig {
     elevenLabsDefaultVoiceId:
       (process.env.ELEVENLABS_DEFAULT_VOICE_ID?.trim() as TtsVoice | undefined) ||
       "21m00Tcm4TlvDq8ikWAM",
-    elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_flash_v2_5"
+    elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_flash_v2_5",
+    geminiApiKey: process.env.GEMINI_API_KEY?.trim() || undefined,
+    geminiTtsModel: process.env.GEMINI_TTS_MODEL?.trim() || "gemini-2.5-flash-preview-tts",
+    geminiTtsVoice: process.env.GEMINI_TTS_VOICE?.trim() || "Kore"
   };
 }

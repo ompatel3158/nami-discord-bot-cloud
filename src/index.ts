@@ -11,7 +11,7 @@ import { formatCitationBlock, respond, splitMessage } from "./utils.js";
 const config = loadConfig();
 const storage = new AppStorage();
 const games = new GameService();
-const ai = config.openRouterApiKey || config.elevenLabsApiKey ? new AiService(config) : null;
+const ai = config.openRouterApiKey || config.elevenLabsApiKey || config.geminiApiKey ? new AiService(config) : null;
 const voicePlayer = new VoiceService();
 
 const context: CommandContext = {
@@ -80,7 +80,7 @@ function startHealthServer(): void {
       const payload = JSON.stringify({
         ok: true,
         botReady: client.isReady(),
-        ttsEnabled: context.ai?.isElevenLabsTtsAvailable() ?? false,
+        ttsEnabled: context.ai?.isTtsAvailable() ?? false,
         uptimeSeconds: Math.floor(process.uptime())
       });
       response.writeHead(200, {
@@ -135,7 +135,7 @@ client.on(Events.MessageCreate, async (message) => {
 
   const settings = storage.getGuildSettings(message.guildId);
 
-  if (context.ai && context.ai.isElevenLabsTtsAvailable() && context.voicePlayer && settings.features.tts && settings.autoVoiceReadEnabled) {
+  if (context.ai && context.ai.isTtsAvailable() && context.voicePlayer && settings.features.tts && settings.autoVoiceReadEnabled) {
     try {
       const member = message.member ?? (message.guild ? await message.guild.members.fetch(message.author.id) : null);
       const memberVoiceChannelId = member?.voice.channelId;
@@ -180,13 +180,13 @@ client.on(Events.MessageCreate, async (message) => {
       }
     } catch (error) {
       console.error("Auto VC speech failure", error);
-      if (error instanceof Error && (error.message.includes("401") || error.message.includes("402") || error.message.includes("404"))) {
+      if (!context.ai.isTtsAvailable()) {
         storage.updateGuildSettings(message.guildId, (current) => {
           current.autoVoiceReadEnabled = false;
           return current;
         });
         await message.channel.send({
-          content: "Auto-read was disabled because ElevenLabs returned 401/402/404. Fix API key, credits/plan, and voice ID (try /preferences voices), then re-enable with /voice auto-read enabled:true.",
+          content: "Auto-read was disabled because no TTS provider is currently available. Fix your TTS API keys/quotas, then re-enable with /voice auto-read enabled:true.",
           allowedMentions: { parse: [] }
         });
       }
@@ -299,8 +299,10 @@ async function runStartupChecks(): Promise<void> {
   try {
     const status = await context.ai.runElevenLabsStartupCheck();
     console.log(`[Startup] ${status}`);
-    if (!context.ai.isElevenLabsTtsAvailable()) {
-      console.log("[Startup] ElevenLabs TTS is disabled for this session; TTS commands and auto-read will be skipped.");
+    if (!context.ai.isTtsAvailable()) {
+      console.log("[Startup] No TTS provider is enabled; TTS commands and auto-read will be skipped.");
+    } else if (!context.ai.isElevenLabsTtsAvailable()) {
+      console.log("[Startup] ElevenLabs is unavailable, but alternate TTS remains enabled.");
     }
   } catch (error) {
     console.error("[Startup] ElevenLabs startup check failed", error);

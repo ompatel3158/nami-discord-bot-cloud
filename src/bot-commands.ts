@@ -110,7 +110,7 @@ export function createCommands(): BotCommand[] {
         return;
       }
       if (subcommand === "voices") {
-        if (!context.ai) throw new Error("ELEVENLABS_API_KEY is missing, so voice lookup is not available yet.");
+        if (!context.ai) throw new Error("No TTS provider is configured yet (set ELEVENLABS_API_KEY and/or GEMINI_API_KEY).");
         await respond(interaction, "Loading available voices...", { defer: true });
         const voices = await context.ai.listVoices();
         const top = voices.slice(0, 20);
@@ -125,7 +125,7 @@ export function createCommands(): BotCommand[] {
         await respond(interaction, "Your preferences have been reset to the defaults.", { ephemeral: true });
         return;
       }
-      const updated = context.storage.updateUserPreferences(interaction.user.id, (current) => {
+      context.storage.updateUserPreferences(interaction.user.id, (current) => {
         if (subcommand === "voice") {
           const voiceId = interaction.options.getString("voice_id");
           const speed = interaction.options.getNumber("speed");
@@ -137,7 +137,12 @@ export function createCommands(): BotCommand[] {
         if (subcommand === "language") current.language = interaction.options.getString("value", true);
         return current;
       });
-      await respond(interaction, `Saved. Voice ID: **${updated.voice || "auto"}**, model: **${updated.modelMode}**, language: **${updated.language}**.`, { ephemeral: true });
+      const persisted = context.storage.getUserPreferences(interaction.user.id);
+      await respond(
+        interaction,
+        `Saved. Voice ID: **${persisted.voice || "auto"}**, model: **${persisted.modelMode}**, language: **${persisted.language}**.`,
+        { ephemeral: true }
+      );
     }
   };
 
@@ -260,7 +265,11 @@ export function createCommands(): BotCommand[] {
         const selected = interaction.options.getChannel("channel");
         const channelId = selected?.id;
         const settings = context.storage.updateGuildSettings(guildId, (current) => {
-          if (action === "enable") current.autoVoiceJoinEnabled = true;
+          if (action === "enable") {
+            current.autoVoiceJoinEnabled = true;
+            // Auto-join without auto-read is confusing in practice, so enable both together.
+            current.autoVoiceReadEnabled = true;
+          }
           if (action === "disable") current.autoVoiceJoinEnabled = false;
           if (action === "include" && channelId && !current.autoVoiceJoinIncludeChannelIds.includes(channelId)) {
             current.autoVoiceJoinIncludeChannelIds.push(channelId);
@@ -293,6 +302,7 @@ export function createCommands(): BotCommand[] {
         await respond(interaction, [
           "Auto-join settings updated.",
           `Enabled: **${settings.autoVoiceJoinEnabled ? "yes" : "no"}**`,
+          `Auto-read: **${settings.autoVoiceReadEnabled ? "yes" : "no"}**`,
           `Included VCs: ${includeList}`,
           `Excluded VCs: ${excludeList}`
         ].join("\n"));
@@ -304,7 +314,7 @@ export function createCommands(): BotCommand[] {
   };
 
   const tts: BotCommand = {
-    data: new SlashCommandBuilder().setName("tts").setDescription("Speak text in voice chat using ElevenLabs voices.")
+    data: new SlashCommandBuilder().setName("tts").setDescription("Speak text in voice chat using available TTS providers.")
       .addSubcommand((subcommand) => subcommand.setName("say").setDescription("Speak a message in your voice channel.")
         .addStringOption((option) => option.setName("text").setDescription("What should Nami say?").setRequired(true))
         .addStringOption((option) => option.setName("voice_id").setDescription("Optional ElevenLabs voice ID").setRequired(false))
@@ -313,7 +323,7 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List the available ElevenLabs voices.")),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "tts");
-      if (!context.ai) throw new Error("OpenRouter and ElevenLabs are not configured yet.");
+      if (!context.ai) throw new Error("No TTS provider is configured yet (set ELEVENLABS_API_KEY and/or GEMINI_API_KEY).");
       if (!context.voicePlayer) throw new Error("Voice playback service is unavailable right now.");
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "voices") {
@@ -335,13 +345,14 @@ export function createCommands(): BotCommand[] {
       const voiceId = interaction.options.getString("voice_id") ?? preferences.voice;
       const speed = clamp(interaction.options.getNumber("speed") ?? preferences.ttsSpeed, 0.7, 1.2);
 
-      if (subcommand === "say" && !context.ai.isElevenLabsTtsAvailable()) {
-        await respond(interaction, "ElevenLabs TTS is currently disabled. Re-checking service status...", { defer: true });
+      if (subcommand === "say" && !context.ai.isTtsAvailable()) {
+        await respond(interaction, "TTS is currently unavailable. Re-checking service status...", { defer: true });
         const recoveryStatus = await context.ai.tryRecoverElevenLabsTts(true);
-        if (!context.ai.isElevenLabsTtsAvailable()) {
-          throw new Error(`ElevenLabs TTS is still unavailable. ${recoveryStatus}`);
+        if (!context.ai.isTtsAvailable()) {
+          const reason = context.ai.getTtsUnavailableReason();
+          throw new Error(`TTS is still unavailable. ${recoveryStatus}${reason ? ` ${reason}` : ""}`);
         }
-        await respond(interaction, "ElevenLabs recovered. Generating speech...");
+        await respond(interaction, "TTS recovered. Generating speech...");
       } else {
         await respond(interaction, "Generating speech...", { defer: true });
       }

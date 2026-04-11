@@ -8,7 +8,7 @@ It supports:
 - Chat-style replies when users mention `@Nami`
 - Web search summaries using DuckDuckGo search results plus AI summarization
 - Text games like guessing, trivia, scramble, rock-paper-scissors, and coinflip
-- ElevenLabs text-to-speech in voice channels
+- Text-to-speech in voice channels with ElevenLabs primary + Gemini fallback
 - Per-user preferences for voice ID, speed, language, and AI reply style
 - Per-user model mode switch (smart vs uncensored)
 - Optional auto voice reading in VC with auto-join include/exclude controls
@@ -23,6 +23,7 @@ It supports:
 - OpenRouter for text generation
 - DuckDuckGo HTML search for free web search results
 - ElevenLabs for text-to-speech
+- Gemini TTS API as fallback speech provider
 
 ## Setup
 
@@ -51,6 +52,9 @@ ELEVENLABS_API_KEY=your_elevenlabs_api_key
 ELEVENLABS_API_KEY_FALLBACK=optional_backup_elevenlabs_key
 ELEVENLABS_DEFAULT_VOICE_ID=
 ELEVENLABS_MODEL_ID=eleven_flash_v2_5
+GEMINI_API_KEY=optional_google_gemini_api_key_for_tts_fallback
+GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+GEMINI_TTS_VOICE=Kore
 PORT=8080
 ```
 
@@ -87,6 +91,9 @@ If your local IP is rate-limited or blocked by provider anti-abuse checks, deplo
    - `ELEVENLABS_API_KEY_FALLBACK` (optional)
    - `ELEVENLABS_DEFAULT_VOICE_ID`
    - `ELEVENLABS_MODEL_ID`
+   - `GEMINI_API_KEY` (optional fallback)
+   - `GEMINI_TTS_MODEL` (optional)
+   - `GEMINI_TTS_VOICE` (optional)
    - `PORT=8080`
 5. Deploy and check logs for startup messages.
 
@@ -107,7 +114,7 @@ Both return JSON status including bot readiness and TTS availability.
 - `/preferences voices`: List available voices and copy the voice ID quickly
 - `/game guess-start|guess-pick|trivia|scramble|rps|coinflip`: Play text games
 - `/voice join|leave|auto-read|autojoin`: Voice controls plus automatic VC speech options
-- `/tts say|stop|voices`: Speak text with ElevenLabs voices
+- `/tts say|stop|voices`: Speak text with available TTS providers (ElevenLabs or Gemini fallback)
 - `/admin feature|system-prompt|announce|clear-history|set-announcements`: Server-level management
 
 ## Notes
@@ -115,7 +122,8 @@ Both return JSON status including bot readiness and TTS availability.
 - Nami stores server settings, user preferences, and short chat history in `data/storage.json`.
 - Generated TTS files are created temporarily under `data/audio` and cleaned up after playback.
 - `/tts voices` shows the voice IDs available to your ElevenLabs account, and `/preferences voice` stores the one you want to use by default.
-- As of April 10, 2026, OpenRouter free models and ElevenLabs plans can still have provider-side rate, concurrency, or credit limits. �Free� does not mean unlimited.
+- As of April 10, 2026, OpenRouter free models and ElevenLabs plans can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
+- Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.
 
 
