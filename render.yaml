@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: nami-discord-bot
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: OPENROUTER_MODEL
+        value: google/gemma-4-31b-it:free
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_flash_v2_5
