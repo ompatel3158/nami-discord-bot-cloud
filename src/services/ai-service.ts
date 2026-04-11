@@ -19,6 +19,7 @@ interface AskOptions {
 }
 
 const UNCENSORED_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
+const OPENROUTER_FALLBACK_MODEL = "google/gemma-3-27b-it:free";
 const NAMI_FIXED_PERSONALITY_PROMPT = [
   "You are Nami, inspired by Nami from One Piece: clever, confident, practical, sharp, and warm with trusted friends.",
   "Speak naturally and confidently. Be clear, helpful, and direct. Keep replies readable for Discord.",
@@ -55,6 +56,8 @@ export class AiService {
   private voicesCache: Array<{ id: string; name: string; category: string }> | null = null;
   private voicesCacheTime: number = 0;
   private readonly VOICES_CACHE_TTL_MS = 3_600_000; // 1 hour
+  private lastTtsRecoveryAttemptMs = 0;
+  private readonly TTS_RECOVERY_COOLDOWN_MS = 120_000;
 
   constructor(config: AppConfig) {
     this.config = config;
@@ -78,6 +81,21 @@ export class AiService {
 
   getElevenLabsDisableReason(): string | undefined {
     return this.elevenLabsDisableReason;
+  }
+
+  async tryRecoverElevenLabsTts(force = false): Promise<string> {
+    if (this.elevenLabsTtsAvailable) {
+      return "ElevenLabs TTS is already enabled.";
+    }
+
+    const now = Date.now();
+    if (!force && now - this.lastTtsRecoveryAttemptMs < this.TTS_RECOVERY_COOLDOWN_MS) {
+      const secondsLeft = Math.ceil((this.TTS_RECOVERY_COOLDOWN_MS - (now - this.lastTtsRecoveryAttemptMs)) / 1000);
+      return `Skipping ElevenLabs re-check for ${secondsLeft}s to avoid request spam.`;
+    }
+
+    this.lastTtsRecoveryAttemptMs = now;
+    return this.runElevenLabsStartupCheck();
   }
 
   async answerQuestion(options: AskOptions): Promise<SearchResult> {
@@ -251,9 +269,9 @@ export class AiService {
     } catch (error) {
       const status = this.getStatusCode(error);
 
-      // If primary key failed with 401 and we have a fallback, try it
-      if (status === 401 && this.config.elevenLabsApiKeyFallback && this.config.elevenLabsApiKeyFallback !== this.activeElevenLabsApiKey) {
-        console.log("[ElevenLabs] Primary key (401). Trying fallback key...");
+      // If primary key failed and we have a fallback, try it.
+      if ((status === 401 || status === 402) && this.config.elevenLabsApiKeyFallback && this.config.elevenLabsApiKeyFallback !== this.activeElevenLabsApiKey) {
+        console.log(`[ElevenLabs] Primary key failed (${status}). Trying fallback key...`);
 
         try {
           return await executeCheck(this.config.elevenLabsApiKeyFallback, "fallback key");
@@ -440,23 +458,80 @@ export class AiService {
       throw new Error("OPENROUTER_API_KEY is missing, so AI chat is unavailable.");
     }
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.config.openRouterApiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://discord.com",
-        "X-Title": "Nami Discord Bot"
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        user: userId
-      })
-    });
+    const modelsToTry = model === OPENROUTER_FALLBACK_MODEL
+      ? [model]
+      : [model, OPENROUTER_FALLBACK_MODEL];
+
+    let lastError: Error | undefined;
+    for (const candidateModel of modelsToTry) {
+      try {
+        return await this.requestOpenRouterChat(messages, userId, candidateModel);
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        lastError = normalized;
+        const status = this.getStatusCode(normalized);
+        const canTryFallback =
+          candidateModel !== OPENROUTER_FALLBACK_MODEL &&
+          this.shouldTryOpenRouterFallback(status, normalized.message);
+
+        if (canTryFallback) {
+          console.warn(
+            `[OpenRouter] Model ${candidateModel} failed (${status ?? "unknown"}). Trying fallback model ${OPENROUTER_FALLBACK_MODEL}.`
+          );
+          continue;
+        }
+
+        throw normalized;
+      }
+    }
+
+    throw lastError ?? new Error("OpenRouter request failed before receiving a valid response.");
+  }
+
+  private async requestOpenRouterChat(messages: RouterMessage[], userId: string, model: string): Promise<string> {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), 30_000);
+
+    let response: Response;
+    try {
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.openRouterApiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://discord.com",
+          "X-Title": "Nami Discord Bot"
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          user: userId
+        }),
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`OpenRouter request timed out after 30s using model ${model}.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
 
     if (!response.ok) {
-      throw new Error(`OpenRouter request failed with status ${response.status}.`);
+      const rawBody = await response.text();
+      const detail = this.extractOpenRouterErrorDetail(rawBody);
+      const statusHint = this.openRouterStatusHint(response.status);
+      const pieces = [
+        `OpenRouter request failed with status ${response.status} using model ${model}.`,
+        detail,
+        statusHint
+      ].filter(Boolean);
+
+      const error = new Error(pieces.join(" "));
+      (error as { statusCode?: number; body?: unknown }).statusCode = response.status;
+      (error as { statusCode?: number; body?: unknown }).body = rawBody;
+      throw error;
     }
 
     const payload = (await response.json()) as {
@@ -479,7 +554,68 @@ export class AiService {
       }
     }
 
-    throw new Error("OpenRouter returned an empty response.");
+    throw new Error(`OpenRouter returned an empty response using model ${model}.`);
+  }
+
+  private shouldTryOpenRouterFallback(status: number | undefined, message: string): boolean {
+    if (status === undefined) {
+      return true;
+    }
+
+    if (status === 401 || status === 402 || status === 403) {
+      return false;
+    }
+
+    if (status === 408 || status === 429 || status >= 500) {
+      return true;
+    }
+
+    if (status === 400 || status === 404) {
+      return /model|provider|unavailable|not found|unsupported|overloaded|rate limit/i.test(message);
+    }
+
+    return false;
+  }
+
+  private extractOpenRouterErrorDetail(rawBody: string): string | undefined {
+    const trimmed = rawBody.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        error?: { message?: string; code?: string };
+        message?: string;
+      };
+      const providerMessage = parsed.error?.message || parsed.message;
+      const providerCode = parsed.error?.code;
+
+      if (providerMessage && providerCode) {
+        return `${providerMessage} (code: ${providerCode}).`;
+      }
+      if (providerMessage) {
+        return `${providerMessage}.`;
+      }
+    } catch {
+      // ignore parse errors and fall through to raw snippet
+    }
+
+    const snippet = trimmed.replace(/\s+/g, " ").slice(0, 240);
+    return snippet ? `Provider response: ${snippet}` : undefined;
+  }
+
+  private openRouterStatusHint(status: number): string | undefined {
+    if (status === 401) {
+      return "Check OPENROUTER_API_KEY.";
+    }
+    if (status === 402) {
+      return "Your OpenRouter credits may be exhausted.";
+    }
+    if (status === 429) {
+      return "OpenRouter rate limit reached; try again shortly.";
+    }
+    return undefined;
   }
 
   private resolveModel(preferences: UserPreferences): string {

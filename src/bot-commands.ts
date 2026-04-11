@@ -329,16 +329,23 @@ export function createCommands(): BotCommand[] {
         await respond(interaction, "Stopped speaking and cleared the queue.");
         return;
       }
-      if (subcommand === "say" && !context.ai.isElevenLabsTtsAvailable()) {
-        const reason = context.ai.getElevenLabsDisableReason() ?? "Fix your ElevenLabs key/plan and restart the bot session.";
-        throw new Error(`ElevenLabs TTS is disabled for this session. ${reason}`);
-      }
       const member = await fetchGuildMember(interaction);
       const preferences = context.storage.getUserPreferences(interaction.user.id);
       const text = interaction.options.getString("text", true);
       const voiceId = interaction.options.getString("voice_id") ?? preferences.voice;
       const speed = clamp(interaction.options.getNumber("speed") ?? preferences.ttsSpeed, 0.7, 1.2);
-      await respond(interaction, "Generating speech...", { defer: true });
+
+      if (subcommand === "say" && !context.ai.isElevenLabsTtsAvailable()) {
+        await respond(interaction, "ElevenLabs TTS is currently disabled. Re-checking service status...", { defer: true });
+        const recoveryStatus = await context.ai.tryRecoverElevenLabsTts(true);
+        if (!context.ai.isElevenLabsTtsAvailable()) {
+          throw new Error(`ElevenLabs TTS is still unavailable. ${recoveryStatus}`);
+        }
+        await respond(interaction, "ElevenLabs recovered. Generating speech...");
+      } else {
+        await respond(interaction, "Generating speech...", { defer: true });
+      }
+
       const filePath = await context.ai.synthesizeSpeech({ text, voice: voiceId, speed, userId: interaction.user.id });
       const queueDepth = await context.voicePlayer.enqueue(member, filePath, speed);
       const queueMessage = queueDepth > 1 ? `Queued. There are **${queueDepth - 1}** item(s) ahead of this one.` : "Playing now.";
