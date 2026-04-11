@@ -349,7 +349,14 @@ export function createCommands(): BotCommand[] {
       const speed = clamp(interaction.options.getNumber("speed") ?? preferences.ttsSpeed, 0.25, 4);
       const instructions = interaction.options.getString("instructions") ?? preferences.ttsInstructions;
       await respond(interaction, "Generating speech...", { defer: true });
-      const filePath = await context.ai.synthesizeSpeech({ text, voice: voiceId, speed, userId: interaction.user.id });
+      const filePath = await context.ai.synthesizeSpeech({
+        text,
+        elevenLabsVoice: voiceId,
+        geminiVoice: preferences.geminiVoice,
+        language: preferences.language,
+        speed,
+        userId: interaction.user.id
+      });
       const queueDepth = await context.voice.enqueue(member, filePath, speed);
       const queueMessage = queueDepth > 1 ? `Queued. There are **${queueDepth - 1}** item(s) ahead of this one.` : "Playing now.";
       await respond(interaction, `${queueMessage}\nVoice ID: **${voiceId}** at **${speed}x**.\nSaved speech notes: ${instructions}\nThis uses an AI-generated voice.`);

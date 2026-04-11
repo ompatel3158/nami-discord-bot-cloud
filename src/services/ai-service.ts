@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import { spawn } from "node:child_process";
 import path from "node:path";
-import { AUDIO_DIR, type AppConfig } from "../config.js";
+import { AUDIO_DIR, ROOT_DIR, type AppConfig } from "../config.js";
 import type {
   Citation,
   ConversationMessage,
@@ -20,6 +21,7 @@ interface AskOptions {
 
 const UNCENSORED_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
 const OPENROUTER_FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+const HUGGINGFACE_DEFAULT_MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition";
 const GEMINI_TTS_DEFAULT_MODEL = "gemini-2.5-flash-preview-tts";
 const GEMINI_TTS_DEFAULT_VOICE = "Kore";
 const GEMINI_PREBUILT_VOICES = [
@@ -54,6 +56,52 @@ const GEMINI_PREBUILT_VOICES = [
   "Sadaltager",
   "Sulafat"
 ] as const;
+const GEMINI_LANGUAGE_VOICE_MAP: Record<string, string> = {
+  english: "Kore",
+  en: "Kore",
+  hindi: "Puck",
+  hi: "Puck",
+  gujarati: "Aoede",
+  gu: "Aoede",
+  marathi: "Leda",
+  mr: "Leda",
+  spanish: "Fenrir",
+  es: "Fenrir",
+  french: "Charon",
+  fr: "Charon",
+  german: "Orus",
+  de: "Orus",
+  italian: "Callirrhoe",
+  it: "Callirrhoe",
+  portuguese: "Autonoe",
+  pt: "Autonoe",
+  japanese: "Iapetus",
+  ja: "Iapetus",
+  korean: "Umbriel",
+  ko: "Umbriel",
+  chinese: "Achernar",
+  zh: "Achernar",
+  arabic: "Alnilam",
+  ar: "Alnilam",
+  russian: "Schedar",
+  ru: "Schedar",
+  turkish: "Gacrux",
+  tr: "Gacrux",
+  indonesian: "Pulcherrima",
+  id: "Pulcherrima",
+  vietnamese: "Achird",
+  vi: "Achird",
+  bengali: "Zubenelgenubi",
+  bn: "Zubenelgenubi",
+  punjabi: "Vindemiatrix",
+  pa: "Vindemiatrix",
+  tamil: "Sadachbia",
+  ta: "Sadachbia",
+  telugu: "Sadaltager",
+  te: "Sadaltager",
+  kannada: "Sulafat",
+  kn: "Sulafat"
+};
 const NAMI_FIXED_PERSONALITY_PROMPT = [
   "You are Nami, inspired by Nami from One Piece: clever, confident, practical, sharp, and warm with trusted friends.",
   "Speak naturally and confidently. Be clear, helpful, and direct. Keep replies readable for Discord.",
@@ -63,7 +111,9 @@ const NAMI_FIXED_PERSONALITY_PROMPT = [
 
 interface SpeechOptions {
   text: string;
-  voice: TtsVoice;
+  elevenLabsVoice: TtsVoice;
+  geminiVoice: string;
+  language: string;
   speed: number;
   userId: string;
 }
@@ -210,7 +260,7 @@ export class AiService {
       }
     ];
 
-    const text = await this.runOpenRouterChat(messages, options.userId, this.resolveModel(options.preferences));
+    const text = await this.runTextChat(messages, options.userId, options.preferences);
     return {
       text,
       citations: searchResults.map(({ title, url }) => ({ title, url }))
@@ -226,7 +276,7 @@ export class AiService {
       };
     }
 
-    const text = await this.runOpenRouterChat(
+    const text = await this.runTextChat(
       [
         {
           role: "system",
@@ -242,13 +292,45 @@ export class AiService {
         }
       ],
       userId,
-      this.resolveModel(preferences)
+      preferences
     );
 
     return {
       text,
       citations: searchResults.map(({ title, url }) => ({ title, url }))
     };
+  }
+
+  private async runTextChat(
+    messages: RouterMessage[],
+    userId: string,
+    preferences: UserPreferences
+  ): Promise<string> {
+    const shouldPreferHuggingFace = Boolean(this.config.huggingFaceApiKey);
+
+    if (shouldPreferHuggingFace) {
+      try {
+        return await this.runHuggingFaceChat(messages, userId);
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        if (!this.config.openRouterApiKey) {
+          throw normalized;
+        }
+        console.warn(
+          `[HuggingFace] Primary model failed (${this.getStatusCode(normalized) ?? "unknown"}). Falling back to OpenRouter.`
+        );
+      }
+    }
+
+    if (this.config.openRouterApiKey) {
+      return this.runOpenRouterChat(messages, userId, this.resolveModel(preferences));
+    }
+
+    if (this.config.huggingFaceApiKey) {
+      return this.runHuggingFaceChat(messages, userId);
+    }
+
+    throw new Error("No AI text provider is configured. Set OPENROUTER_API_KEY or HUGGINGFACE_API_KEY.");
   }
 
   async synthesizeSpeech(options: SpeechOptions): Promise<string> {
@@ -294,9 +376,18 @@ export class AiService {
 
   private async synthesizeWithElevenLabs(options: SpeechOptions): Promise<string> {
     const voiceId =
-      options.voice && options.voice !== "default"
-        ? options.voice
+      options.elevenLabsVoice && options.elevenLabsVoice !== "default"
+        ? options.elevenLabsVoice
         : this.config.elevenLabsDefaultVoiceId;
+
+    if (this.config.elevenLabsUsePythonSdk) {
+      try {
+        return await this.synthesizeWithElevenLabsPython(options, voiceId);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`[ElevenLabs] Python SDK synthesis failed. Falling back to REST API. ${reason}`);
+      }
+    }
 
     let result: Awaited<ReturnType<AiService["requestSpeechNoRetry"]>>;
     try {
@@ -326,20 +417,103 @@ export class AiService {
     return filePath;
   }
 
+  private async synthesizeWithElevenLabsPython(options: SpeechOptions, voiceId: string): Promise<string> {
+    const apiKey = this.activeElevenLabsApiKey;
+    if (!apiKey) {
+      throw new Error("ELEVENLABS_API_KEY is missing, so speech generation is unavailable.");
+    }
+
+    const outputPath = path.join(AUDIO_DIR, `${Date.now()}-${options.userId}-${voiceId}.mp3`);
+    await this.runElevenLabsPythonProcess({
+      text: options.text.slice(0, 4000),
+      voiceId,
+      modelId: this.config.elevenLabsModelId || "eleven_flash_v2_5",
+      speed: options.speed,
+      outputPath,
+      apiKey
+    });
+
+    this.ttsRequestCountThisSession += 1;
+    return outputPath;
+  }
+
+  private async runElevenLabsPythonProcess(params: {
+    text: string;
+    voiceId: string;
+    modelId: string;
+    speed: number;
+    outputPath: string;
+    apiKey: string;
+  }): Promise<void> {
+    const scriptPath = path.join(ROOT_DIR, "tts.py");
+    await fs.access(scriptPath);
+
+    const args = [
+      scriptPath,
+      "--voice-id",
+      params.voiceId,
+      "--model-id",
+      params.modelId,
+      "--output",
+      params.outputPath,
+      "--speed",
+      String(params.speed)
+    ];
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(this.config.pythonExecutable, args, {
+        env: {
+          ...process.env,
+          ELEVENLABS_API_KEY: params.apiKey
+        },
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", (error) => {
+        reject(new Error(`Failed to start Python process '${this.config.pythonExecutable}': ${error.message}`));
+      });
+
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        const details = (stderr || stdout || `Exited with code ${code ?? "unknown"}`).trim();
+        reject(new Error(`ElevenLabs Python SDK process failed (${code ?? "unknown"}): ${details}`));
+      });
+
+      child.stdin.write(params.text);
+      child.stdin.end();
+    });
+  }
+
   private async synthesizeWithGemini(options: SpeechOptions): Promise<string> {
     if (!this.config.geminiApiKey) {
       throw new Error("GEMINI_API_KEY is missing, so Gemini speech generation is unavailable.");
     }
 
-    const requestedVoice = this.resolveGeminiVoice(options.voice);
+    const requestedVoice = this.resolveGeminiVoice(options.geminiVoice, options.language);
+    const languageFallbackVoice = this.getGeminiVoiceForLanguage(options.language);
 
     try {
       return await this.requestGeminiSpeech(options.text, options.userId, requestedVoice);
     } catch (error) {
       const status = this.getStatusCode(error);
-      if (status === 400 && requestedVoice !== (this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE)) {
+      if (status === 400 && requestedVoice !== languageFallbackVoice) {
         console.warn(`[GeminiTTS] Voice '${requestedVoice}' rejected. Retrying with default voice.`);
-        return this.requestGeminiSpeech(options.text, options.userId, this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE);
+        return this.requestGeminiSpeech(options.text, options.userId, languageFallbackVoice);
       }
 
       const mapped = this.mapGeminiSpeechError(error, requestedVoice);
@@ -453,10 +627,10 @@ export class AiService {
     return Buffer.concat([header, pcmData]);
   }
 
-  private resolveGeminiVoice(preferredVoice: string): string {
+  private resolveGeminiVoice(preferredVoice: string | undefined, language: string): string {
     const requested = preferredVoice?.trim();
-    const fallbackVoice = this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE;
-    if (!requested || requested === "default") {
+    const fallbackVoice = this.getGeminiVoiceForLanguage(language);
+    if (!requested || requested === "default" || requested.toLowerCase() === "auto") {
       return fallbackVoice;
     }
 
@@ -471,6 +645,36 @@ export class AiService {
     }
 
     return fallbackVoice;
+  }
+
+  private getGeminiVoiceForLanguage(language: string): string {
+    const normalized = this.normalizeLanguageKey(language);
+    if (normalized) {
+      const mapped = GEMINI_LANGUAGE_VOICE_MAP[normalized];
+      if (mapped) {
+        return mapped;
+      }
+    }
+
+    return this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE;
+  }
+
+  private normalizeLanguageKey(language: string | undefined): string {
+    if (!language) {
+      return "";
+    }
+
+    const compact = language.trim().toLowerCase();
+    if (!compact) {
+      return "";
+    }
+
+    const code = compact.match(/^[a-z]{2}(?=-|_|$)/)?.[0];
+    if (code) {
+      return code;
+    }
+
+    return compact.split(/[\s\-_/]+/)[0] ?? compact;
   }
 
   async runElevenLabsStartupCheck(): Promise<string> {
@@ -497,7 +701,9 @@ export class AiService {
             checkVoiceId,
             {
               text: "Ready.",
-              voice: checkVoiceId,
+              elevenLabsVoice: checkVoiceId,
+              geminiVoice: this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE,
+              language: "English",
               speed: 1,
               userId: "startup-check"
             },
@@ -676,6 +882,10 @@ export class AiService {
     }));
   }
 
+  listGoogleVoices(): Array<{ id: string; name: string; category: string }> {
+    return this.listGeminiVoices();
+  }
+
   private getStatusCode(error: unknown): number | undefined {
     if (typeof error === "object" && error !== null) {
       const maybeStatusCode = (error as { statusCode?: unknown }).statusCode;
@@ -775,6 +985,222 @@ export class AiService {
     }
 
     return body.replace(/\s+/g, " ").trim().slice(0, 220);
+  }
+
+  private async runHuggingFaceChat(messages: RouterMessage[], userId: string): Promise<string> {
+    let chatCompletionsError: Error | undefined;
+
+    try {
+      return await this.requestHuggingFaceChatCompletions(messages, userId);
+    } catch (error) {
+      chatCompletionsError = error instanceof Error ? error : new Error(String(error));
+      console.warn(
+        `[HuggingFace] chat/completions failed (${this.getStatusCode(chatCompletionsError) ?? "unknown"}). Trying legacy endpoint.`
+      );
+    }
+
+    try {
+      return await this.requestHuggingFaceTextGeneration(messages);
+    } catch (fallbackError) {
+      const normalizedFallback = fallbackError instanceof Error
+        ? fallbackError
+        : new Error(String(fallbackError));
+
+      if (!chatCompletionsError) {
+        throw normalizedFallback;
+      }
+
+      throw new Error(`${chatCompletionsError.message} Legacy fallback failed: ${normalizedFallback.message}`);
+    }
+  }
+
+  private async requestHuggingFaceChatCompletions(
+    messages: RouterMessage[],
+    userId: string
+  ): Promise<string> {
+    if (!this.config.huggingFaceApiKey) {
+      throw new Error("HUGGINGFACE_API_KEY is missing, so Hugging Face chat is unavailable.");
+    }
+
+    const model = this.config.huggingFaceModel || HUGGINGFACE_DEFAULT_MODEL;
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), 45_000);
+
+    let response: Response;
+    try {
+      response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.huggingFaceApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          user: userId,
+          max_tokens: 900,
+          temperature: 0.7
+        }),
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`Hugging Face request timed out after 45s using model ${model}.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+
+    if (!response.ok) {
+      const rawBody = await response.text();
+      const detail = this.extractHuggingFaceErrorDetail(rawBody);
+      const hint = this.huggingFaceStatusHint(response.status);
+      const pieces = [
+        `Hugging Face request failed with status ${response.status} using model ${model}.`,
+        detail,
+        hint
+      ].filter(Boolean);
+      const error = new Error(pieces.join(" "));
+      (error as { statusCode?: number; body?: unknown }).statusCode = response.status;
+      (error as { statusCode?: number; body?: unknown }).body = rawBody;
+      throw error;
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
+    };
+    const content = payload.choices?.[0]?.message?.content;
+
+    if (typeof content === "string" && content.trim()) {
+      return content.trim();
+    }
+
+    if (Array.isArray(content)) {
+      const joined = content
+        .map((item) => item.text?.trim() || "")
+        .filter(Boolean)
+        .join("\n");
+      if (joined) {
+        return joined;
+      }
+    }
+
+    throw new Error(`Hugging Face returned an empty response using model ${model}.`);
+  }
+
+  private async requestHuggingFaceTextGeneration(messages: RouterMessage[]): Promise<string> {
+    if (!this.config.huggingFaceApiKey) {
+      throw new Error("HUGGINGFACE_API_KEY is missing, so Hugging Face chat is unavailable.");
+    }
+
+    const model = this.config.huggingFaceModel || HUGGINGFACE_DEFAULT_MODEL;
+    const response = await fetch(
+      `https://api-inference.huggingface.co/models/${encodeURIComponent(model)}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.huggingFaceApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          inputs: this.buildHuggingFacePrompt(messages),
+          parameters: {
+            max_new_tokens: 900,
+            temperature: 0.7,
+            return_full_text: false
+          },
+          options: {
+            wait_for_model: true
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const rawBody = await response.text();
+      const detail = this.extractHuggingFaceErrorDetail(rawBody);
+      const hint = this.huggingFaceStatusHint(response.status);
+      const pieces = [
+        `Hugging Face legacy endpoint failed with status ${response.status} using model ${model}.`,
+        detail,
+        hint
+      ].filter(Boolean);
+      const error = new Error(pieces.join(" "));
+      (error as { statusCode?: number; body?: unknown }).statusCode = response.status;
+      (error as { statusCode?: number; body?: unknown }).body = rawBody;
+      throw error;
+    }
+
+    const payload = (await response.json()) as
+      | Array<{ generated_text?: string }>
+      | { generated_text?: string; error?: string };
+
+    if (Array.isArray(payload)) {
+      const generated = payload[0]?.generated_text;
+      if (typeof generated === "string" && generated.trim()) {
+        return generated.trim();
+      }
+    } else {
+      if (typeof payload.generated_text === "string" && payload.generated_text.trim()) {
+        return payload.generated_text.trim();
+      }
+      if (typeof payload.error === "string" && payload.error.trim()) {
+        throw new Error(`Hugging Face legacy endpoint error: ${payload.error.trim()}`);
+      }
+    }
+
+    throw new Error(`Hugging Face legacy endpoint returned an empty response using model ${model}.`);
+  }
+
+  private buildHuggingFacePrompt(messages: RouterMessage[]): string {
+    const chunks = messages.map((message) => {
+      const role = message.role.toUpperCase();
+      return `${role}: ${message.content}`;
+    });
+    return `${chunks.join("\n\n")}\n\nASSISTANT:`;
+  }
+
+  private extractHuggingFaceErrorDetail(rawBody: string): string | undefined {
+    const trimmed = rawBody.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        error?: string | { message?: string };
+        message?: string;
+      };
+
+      if (typeof parsed.error === "string" && parsed.error.trim()) {
+        return `${parsed.error.trim()}.`;
+      }
+      if (typeof parsed.error === "object" && parsed.error?.message?.trim()) {
+        return `${parsed.error.message.trim()}.`;
+      }
+      if (parsed.message?.trim()) {
+        return `${parsed.message.trim()}.`;
+      }
+    } catch {
+      // ignore parse errors and fall through to raw snippet
+    }
+
+    const snippet = trimmed.replace(/\s+/g, " ").slice(0, 240);
+    return snippet ? `Provider response: ${snippet}` : undefined;
+  }
+
+  private huggingFaceStatusHint(status: number): string | undefined {
+    if (status === 401 || status === 403) {
+      return "Check HUGGINGFACE_API_KEY permissions.";
+    }
+    if (status === 429) {
+      return "Hugging Face rate limit reached; try again shortly.";
+    }
+    if (status === 503) {
+      return "Model may still be loading; retry in a few moments.";
+    }
+    return undefined;
   }
 
   private async runOpenRouterChat(messages: RouterMessage[], userId: string, model: string): Promise<string> {

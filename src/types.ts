@@ -15,6 +15,7 @@ export interface GuildSettings {
 
 export interface UserPreferences {
   voice: TtsVoice;
+  geminiVoice: string;
   ttsInstructions: string;
   ttsSpeed: number;
   aiStyle: string;

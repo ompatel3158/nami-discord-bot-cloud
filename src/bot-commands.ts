@@ -51,7 +51,7 @@ export function createCommands(): BotCommand[] {
       .addBooleanOption((option) => option.setName("web").setDescription("Let Nami search the web before answering.").setRequired(false)),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "ai");
-      if (!context.ai) throw new Error("OPENROUTER_API_KEY is missing, so AI replies are not available yet.");
+      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY or HUGGINGFACE_API_KEY.");
       const guildId = requireGuildId(interaction);
       const settings = context.storage.getGuildSettings(guildId);
       const preferences = context.storage.getUserPreferences(interaction.user.id);
@@ -72,7 +72,7 @@ export function createCommands(): BotCommand[] {
       .addStringOption((option) => option.setName("query").setDescription("What should Nami search for?").setRequired(true)),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "search");
-      if (!context.ai) throw new Error("OPENROUTER_API_KEY is missing, so web summaries are not available yet.");
+      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY or HUGGINGFACE_API_KEY.");
       const query = interaction.options.getString("query", true);
       const preferences = context.storage.getUserPreferences(interaction.user.id);
       await respond(interaction, "Searching the web...", { defer: true });
@@ -84,8 +84,9 @@ export function createCommands(): BotCommand[] {
   const preferences: BotCommand = {
     data: new SlashCommandBuilder().setName("preferences").setDescription("Set your Nami preferences.")
       .addSubcommand((subcommand) => subcommand.setName("view").setDescription("Show your current settings."))
-      .addSubcommand((subcommand) => subcommand.setName("voice").setDescription("Set your preferred ElevenLabs voice and playback speed.")
+      .addSubcommand((subcommand) => subcommand.setName("voice").setDescription("Set your preferred ElevenLabs voice, Google voice, and playback speed.")
         .addStringOption((option) => option.setName("voice_id").setDescription("ElevenLabs voice ID from /tts voices").setRequired(false))
+        .addStringOption((option) => option.setName("google_voice").setDescription("Google/Gemini voice name, or auto").setRequired(false))
         .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.7 to 1.2").setRequired(false)))
       .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("Show voices and how to set one quickly."))
       .addSubcommand((subcommand) => subcommand.setName("model").setDescription("Choose your AI model behavior.")
@@ -102,6 +103,7 @@ export function createCommands(): BotCommand[] {
         await respond(interaction, [
           "Your preferences:",
           `Voice ID: **${current.voice || "auto"}**`,
+          `Google voice: **${current.geminiVoice || "auto"}**`,
           `TTS speed: **${current.ttsSpeed}x**`,
           `Model mode: **${current.modelMode}**`,
           `Default web search: **${current.searchEnabledByDefault ? "on" : "off"}**`,
@@ -113,11 +115,24 @@ export function createCommands(): BotCommand[] {
         if (!context.ai) throw new Error("No TTS provider is configured yet (set ELEVENLABS_API_KEY and/or GEMINI_API_KEY).");
         await respond(interaction, "Loading available voices...", { defer: true });
         const voices = await context.ai.listVoices();
-        const top = voices.slice(0, 20);
-        const list = top.length
-          ? top.map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
-          : "No voices were returned for this ElevenLabs key.";
-        await respond(interaction, `Available voices:\n${list}\n\nSet one with: \`/preferences voice voice_id:<id>\``, { ephemeral: true });
+        const googleVoices = context.ai.listGoogleVoices();
+        const providerList = voices.slice(0, 20);
+        const googleList = googleVoices.slice(0, 20);
+        const providerText = providerList.length
+          ? providerList.map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
+          : "No provider voices were returned.";
+        const googleText = googleList.length
+          ? googleList.map((voiceInfo) => `- **${voiceInfo.name}**: \`${voiceInfo.id}\``).join("\n")
+          : "No Google voices available.";
+        await respond(interaction, [
+          "Provider voices:",
+          providerText,
+          "",
+          "Google/Gemini voices:",
+          googleText,
+          "",
+          "Set defaults with: `/preferences voice voice_id:<id> google_voice:<name|auto>`"
+        ].join("\n"), { ephemeral: true });
         return;
       }
       if (subcommand === "reset") {
@@ -128,8 +143,10 @@ export function createCommands(): BotCommand[] {
       context.storage.updateUserPreferences(interaction.user.id, (current) => {
         if (subcommand === "voice") {
           const voiceId = interaction.options.getString("voice_id");
+          const googleVoice = interaction.options.getString("google_voice");
           const speed = interaction.options.getNumber("speed");
           if (voiceId !== null) current.voice = voiceId.trim();
+          if (googleVoice !== null) current.geminiVoice = googleVoice.trim() || "auto";
           if (speed !== null) current.ttsSpeed = clamp(speed, 0.7, 1.2);
         }
         if (subcommand === "model") current.modelMode = interaction.options.getString("mode", true) as AiModelMode;
@@ -140,7 +157,7 @@ export function createCommands(): BotCommand[] {
       const persisted = context.storage.getUserPreferences(interaction.user.id);
       await respond(
         interaction,
-        `Saved. Voice ID: **${persisted.voice || "auto"}**, model: **${persisted.modelMode}**, language: **${persisted.language}**.`,
+        `Saved. Voice ID: **${persisted.voice || "auto"}**, Google voice: **${persisted.geminiVoice || "auto"}**, model: **${persisted.modelMode}**, language: **${persisted.language}**.`,
         { ephemeral: true }
       );
     }
@@ -318,9 +335,10 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) => subcommand.setName("say").setDescription("Speak a message in your voice channel.")
         .addStringOption((option) => option.setName("text").setDescription("What should Nami say?").setRequired(true))
         .addStringOption((option) => option.setName("voice_id").setDescription("Optional ElevenLabs voice ID").setRequired(false))
+        .addStringOption((option) => option.setName("google_voice").setDescription("Optional Google/Gemini voice name or auto").setRequired(false))
         .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.7 to 1.2").setRequired(false)))
       .addSubcommand((subcommand) => subcommand.setName("stop").setDescription("Stop speaking and clear the queue."))
-      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List the available ElevenLabs voices.")),
+      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List available TTS voices (provider + Google).")),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "tts");
       if (!context.ai) throw new Error("No TTS provider is configured yet (set ELEVENLABS_API_KEY and/or GEMINI_API_KEY).");
@@ -329,8 +347,14 @@ export function createCommands(): BotCommand[] {
       if (subcommand === "voices") {
         await respond(interaction, "Loading available voices...", { defer: true });
         const voices = await context.ai.listVoices();
-        const list = voices.length ? voices.slice(0, 15).map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n") : "No voices were returned for this ElevenLabs key.";
-        await respond(interaction, `Available voices:\n${list}`, { ephemeral: true });
+        const googleVoices = context.ai.listGoogleVoices();
+        const providerText = voices.length
+          ? voices.slice(0, 15).map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
+          : "No provider voices were returned.";
+        const googleText = googleVoices.length
+          ? googleVoices.slice(0, 15).map((voiceInfo) => `- **${voiceInfo.name}**: \`${voiceInfo.id}\``).join("\n")
+          : "No Google voices available.";
+        await respond(interaction, `Provider voices:\n${providerText}\n\nGoogle/Gemini voices:\n${googleText}`, { ephemeral: true });
         return;
       }
       const guildId = requireGuildId(interaction);
@@ -342,7 +366,8 @@ export function createCommands(): BotCommand[] {
       const member = await fetchGuildMember(interaction);
       const preferences = context.storage.getUserPreferences(interaction.user.id);
       const text = interaction.options.getString("text", true);
-      const voiceId = interaction.options.getString("voice_id") ?? preferences.voice;
+      const elevenLabsVoice = interaction.options.getString("voice_id") ?? preferences.voice;
+      const googleVoice = interaction.options.getString("google_voice") ?? preferences.geminiVoice;
       const speed = clamp(interaction.options.getNumber("speed") ?? preferences.ttsSpeed, 0.7, 1.2);
 
       if (subcommand === "say" && !context.ai.isTtsAvailable()) {
@@ -357,10 +382,17 @@ export function createCommands(): BotCommand[] {
         await respond(interaction, "Generating speech...", { defer: true });
       }
 
-      const filePath = await context.ai.synthesizeSpeech({ text, voice: voiceId, speed, userId: interaction.user.id });
+      const filePath = await context.ai.synthesizeSpeech({
+        text,
+        elevenLabsVoice,
+        geminiVoice: googleVoice,
+        language: preferences.language,
+        speed,
+        userId: interaction.user.id
+      });
       const queueDepth = await context.voicePlayer.enqueue(member, filePath, speed);
       const queueMessage = queueDepth > 1 ? `Queued. There are **${queueDepth - 1}** item(s) ahead of this one.` : "Playing now.";
-      await respond(interaction, `${queueMessage}\nVoice ID: **${voiceId || "auto"}** at **${speed}x**.\nThis uses an AI-generated voice.`);
+      await respond(interaction, `${queueMessage}\nElevenLabs voice: **${elevenLabsVoice || "default"}**\nGoogle voice: **${googleVoice || "auto"}**\nSpeed: **${speed}x**.`);
     }
   };
 
@@ -420,10 +452,10 @@ export function createCommands(): BotCommand[] {
         "`/preferences model mode:<smart|uncensored>` - switch AI model mode",
         "`@Nami <message>` - chat naturally by mentioning the bot in a server",
         "`/search query:<text>` - web search summary with source links",
-        "`/preferences ...` - your voice ID, speed, model mode, language, and default search",
+        "`/preferences ...` - your voice IDs, speed, model mode, language, and default search",
         "`/memory view`, `/memory clear` - see or clear remembered conversation",
         "`/voice auto-read`, `/voice autojoin` - automatic VC speech behavior",
-        "`/tts voices` - list the ElevenLabs voice IDs available to your API key",
+        "`/tts voices` - list provider voices plus Google/Gemini voice names",
         "`/game guess-start`, `/game guess-pick`, `/game trivia`, `/game scramble`, `/game rps`, `/game coinflip`",
         "`/voice join`, `/voice leave`, `/tts say`, `/tts stop` - voice chat controls",
         "`/admin ...` - feature flags, prompts, announcements, and history cleanup"

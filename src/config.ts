@@ -28,6 +28,7 @@ export const DEFAULT_GUILD_SETTINGS: GuildSettings = {
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   voice: "default",
+  geminiVoice: "auto",
   ttsInstructions: "Friendly, clear, and natural.",
   ttsSpeed: 1,
   aiStyle: "Friendly, practical, and easy to understand.",
@@ -40,15 +41,28 @@ export interface AppConfig {
   discordToken: string;
   discordClientId: string;
   discordGuildId?: string;
+  huggingFaceApiKey?: string;
+  huggingFaceModel: string;
   openRouterApiKey?: string;
   openRouterModel: string;
   elevenLabsApiKey?: string;
   elevenLabsApiKeyFallback?: string;
   elevenLabsDefaultVoiceId: TtsVoice;
   elevenLabsModelId: string;
+  elevenLabsUsePythonSdk: boolean;
+  pythonExecutable: string;
   geminiApiKey?: string;
   geminiTtsModel: string;
   geminiTtsVoice: string;
+}
+
+function envFlag(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) {
+    return defaultValue;
+  }
+
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
 function requiredEnv(name: string): string {
@@ -65,6 +79,10 @@ export function loadConfig(): AppConfig {
     discordToken: requiredEnv("DISCORD_TOKEN"),
     discordClientId: requiredEnv("DISCORD_CLIENT_ID"),
     discordGuildId: process.env.DISCORD_GUILD_ID?.trim() || undefined,
+    huggingFaceApiKey:
+      process.env.HUGGINGFACE_API_KEY?.trim() || process.env.HF_API_KEY?.trim() || undefined,
+    huggingFaceModel:
+      process.env.HUGGINGFACE_MODEL?.trim() || "dphn/Dolphin-Mistral-24B-Venice-Edition",
     openRouterApiKey: process.env.OPENROUTER_API_KEY?.trim() || undefined,
     openRouterModel: process.env.OPENROUTER_MODEL?.trim() || "google/gemma-3-27b-it:free",
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY?.trim() || undefined,
@@ -73,8 +91,14 @@ export function loadConfig(): AppConfig {
       (process.env.ELEVENLABS_DEFAULT_VOICE_ID?.trim() as TtsVoice | undefined) ||
       "21m00Tcm4TlvDq8ikWAM",
     elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_flash_v2_5",
-    geminiApiKey: process.env.GEMINI_API_KEY?.trim() || undefined,
-    geminiTtsModel: process.env.GEMINI_TTS_MODEL?.trim() || "gemini-2.5-flash-preview-tts",
-    geminiTtsVoice: process.env.GEMINI_TTS_VOICE?.trim() || "Kore"
+    elevenLabsUsePythonSdk: envFlag("ELEVENLABS_USE_PYTHON_SDK", true),
+    pythonExecutable:
+      process.env.PYTHON_EXECUTABLE?.trim() || (process.platform === "win32" ? "python" : "python3"),
+    geminiApiKey:
+      process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || undefined,
+    geminiTtsModel:
+      process.env.GEMINI_TTS_MODEL?.trim() || process.env.GOOGLE_TTS_MODEL?.trim() || "gemini-2.5-flash-preview-tts",
+    geminiTtsVoice:
+      process.env.GEMINI_TTS_VOICE?.trim() || process.env.GOOGLE_TTS_VOICE?.trim() || "Kore"
   };
 }

@@ -11,7 +11,13 @@ import { formatCitationBlock, respond, splitMessage } from "./utils.js";
 const config = loadConfig();
 const storage = new AppStorage();
 const games = new GameService();
-const ai = config.openRouterApiKey || config.elevenLabsApiKey || config.geminiApiKey ? new AiService(config) : null;
+const ai =
+  config.openRouterApiKey ||
+  config.huggingFaceApiKey ||
+  config.elevenLabsApiKey ||
+  config.geminiApiKey
+    ? new AiService(config)
+    : null;
 const voicePlayer = new VoiceService();
 
 const context: CommandContext = {
@@ -169,7 +175,9 @@ client.on(Events.MessageCreate, async (message) => {
 
             const filePath = await context.ai.synthesizeSpeech({
               text: speechText,
-              voice: preferences.voice,
+              elevenLabsVoice: preferences.voice,
+              geminiVoice: preferences.geminiVoice,
+              language: preferences.language,
               speed: preferences.ttsSpeed,
               userId: message.author.id
             });
