@@ -19,7 +19,7 @@ interface AskOptions {
 }
 
 const UNCENSORED_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
-const OPENROUTER_FALLBACK_MODEL = "google/gemma-3-27b-it:free";
+const OPENROUTER_FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const NAMI_FIXED_PERSONALITY_PROMPT = [
   "You are Nami, inspired by Nami from One Piece: clever, confident, practical, sharp, and warm with trusted friends.",
   "Speak naturally and confidently. Be clear, helpful, and direct. Keep replies readable for Discord.",
