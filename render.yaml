@@ -8,6 +8,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: CARTESIA_VERSION
+        value: "2026-03-01"
+      - key: CARTESIA_MODEL
+        value: sonic-3
+      - key: USE_SUPABASE_STORAGE
+        value: "false"
       - key: OPENROUTER_MODEL
         value: nvidia/nemotron-3-super-120b-a12b:free
       - key: VENICE_MODEL

@@ -42,6 +42,14 @@ export interface AppConfig {
   discordToken: string;
   discordClientId: string;
   discordGuildId?: string;
+  cartesiaApiKey?: string;
+  cartesiaVersion: string;
+  cartesiaModel: string;
+  cartesiaDefaultVoiceId: string;
+  cartesiaMaxBufferDelayMs: number;
+  supabaseUrl?: string;
+  supabaseServiceRoleKey?: string;
+  useSupabaseStorage: boolean;
   veniceApiKey?: string;
   veniceModel: string;
   huggingFaceApiKey?: string;
@@ -86,6 +94,20 @@ function envFlag(name: string, defaultValue: boolean): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
+function envInt(name: string, defaultValue: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return defaultValue;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return defaultValue;
+  }
+
+  return parsed;
+}
+
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -111,6 +133,15 @@ export function loadConfig(): AppConfig {
     discordToken: requiredEnv("DISCORD_TOKEN"),
     discordClientId: requiredEnv("DISCORD_CLIENT_ID"),
     discordGuildId: process.env.DISCORD_GUILD_ID?.trim() || undefined,
+    cartesiaApiKey: process.env.CARTESIA_API_KEY?.trim() || undefined,
+    cartesiaVersion: process.env.CARTESIA_VERSION?.trim() || "2026-03-01",
+    cartesiaModel: process.env.CARTESIA_MODEL?.trim() || "sonic-3",
+    cartesiaDefaultVoiceId:
+      process.env.CARTESIA_DEFAULT_VOICE_ID?.trim() || "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+    cartesiaMaxBufferDelayMs: Math.max(0, Math.min(5000, envInt("CARTESIA_MAX_BUFFER_DELAY_MS", 3000))),
+    supabaseUrl: process.env.SUPABASE_URL?.trim() || undefined,
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,
+    useSupabaseStorage: envFlag("USE_SUPABASE_STORAGE", false),
     veniceApiKey:
       process.env.VENICE_API_KEY?.trim() || process.env.VENICE_INFERENCE_KEY?.trim() || undefined,
     veniceModel: process.env.VENICE_MODEL?.trim() || "venice-uncensored",

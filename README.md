@@ -27,6 +27,7 @@ It supports:
 - ElevenLabs for text-to-speech
 - Gemini TTS API as fallback speech provider
 - Python 3 + `elevenlabs-python` SDK for ElevenLabs synthesis execution
+- Cartesia + Supabase scaffolding for in-progress migration work
 
 ## Setup
 
@@ -49,6 +50,14 @@ It supports:
 DISCORD_TOKEN=your_discord_bot_token
 DISCORD_CLIENT_ID=your_discord_application_id
 DISCORD_GUILD_ID=optional_guild_id_for_fast_dev_command_registration
+CARTESIA_API_KEY=optional_cartesia_api_key
+CARTESIA_VERSION=2026-03-01
+CARTESIA_MODEL=sonic-3
+CARTESIA_DEFAULT_VOICE_ID=f786b574-daa5-4673-aa0c-cbe3e8534c02
+CARTESIA_MAX_BUFFER_DELAY_MS=3000
+SUPABASE_URL=optional_supabase_project_url
+SUPABASE_SERVICE_ROLE_KEY=optional_supabase_service_role_key
+USE_SUPABASE_STORAGE=false
 VENICE_API_KEY=your_venice_api_key
 VENICE_MODEL=venice-uncensored
 OPENROUTER_API_KEY=your_openrouter_api_key
@@ -75,6 +84,8 @@ PORT=8080
 ```
 
 `GOOGLE_API_KEY`, `GOOGLE_TTS_MODEL`, and `GOOGLE_TTS_VOICE` are accepted as aliases for the Gemini settings.
+
+`CARTESIA_*` and `SUPABASE_*` variables are scaffolded for the migration currently in progress. The active runtime still uses ElevenLabs + Gemini for TTS and local JSON storage until the migration wiring is completed.
 
 For Gemini key failover, configure `GEMINI_API_KEY_2/3/4` (or `GOOGLE_API_KEY_2/3/4`). The bot tries keys in order and falls back to the next key when auth/quota/rate-limit errors occur.
 
