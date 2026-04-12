@@ -20,6 +20,7 @@ interface AskOptions {
 }
 
 const OPENROUTER_FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+const VENICE_DEFAULT_MODEL = "venice-uncensored";
 const HUGGINGFACE_DEFAULT_MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition";
 const HUGGINGFACE_UNCENSORED_MODEL = "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive";
 const GEMINI_TTS_DEFAULT_MODEL = "gemini-2.5-flash-preview-tts";
@@ -312,38 +313,22 @@ export class AiService {
     preferences: UserPreferences
   ): Promise<string> {
     const isUncensoredMode = preferences.modelMode === "uncensored";
-    const huggingFaceModel = this.resolveHuggingFaceModel(preferences);
-    const shouldPreferHuggingFace = Boolean(this.config.huggingFaceApiKey);
-
-    if (shouldPreferHuggingFace) {
-      try {
-        return await this.runHuggingFaceChat(messages, userId, huggingFaceModel);
-      } catch (error) {
-        const normalized = error instanceof Error ? error : new Error(String(error));
-        if (isUncensoredMode || !this.config.openRouterApiKey) {
-          throw normalized;
-        }
-        console.warn(
-          `[HuggingFace] Primary model failed (${this.getStatusCode(normalized) ?? "unknown"}). Falling back to OpenRouter.`
+    if (isUncensoredMode) {
+      if (!this.config.veniceApiKey) {
+        throw new Error(
+          "Uncensored mode is pinned to Venice. Configure VENICE_API_KEY and try again."
         );
       }
-    }
-
-    if (isUncensoredMode) {
-      throw new Error(
-        "Uncensored mode is pinned to Hugging Face. Configure HUGGINGFACE_API_KEY and try again."
-      );
+      return this.runVeniceChat(messages, userId, this.resolveVeniceModel(preferences));
     }
 
     if (this.config.openRouterApiKey) {
       return this.runOpenRouterChat(messages, userId, this.resolveOpenRouterModel());
     }
 
-    if (this.config.huggingFaceApiKey) {
-      return this.runHuggingFaceChat(messages, userId, huggingFaceModel);
-    }
-
-    throw new Error("No AI text provider is configured. Set OPENROUTER_API_KEY or HUGGINGFACE_API_KEY.");
+    throw new Error(
+      "Smart mode requires OPENROUTER_API_KEY. Uncensored mode requires VENICE_API_KEY."
+    );
   }
 
   async synthesizeSpeech(options: SpeechOptions): Promise<string> {
@@ -1289,6 +1274,137 @@ export class AiService {
     return undefined;
   }
 
+  private async runVeniceChat(messages: RouterMessage[], userId: string, model: string): Promise<string> {
+    if (!this.config.veniceApiKey) {
+      throw new Error("VENICE_API_KEY is missing, so Venice chat is unavailable.");
+    }
+
+    return this.requestVeniceChat(messages, userId, model);
+  }
+
+  private async requestVeniceChat(messages: RouterMessage[], userId: string, model: string): Promise<string> {
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), 30_000);
+
+    let response: Response;
+    try {
+      response = await fetch("https://api.venice.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.veniceApiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          user: userId
+        }),
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`Venice request timed out after 30s using model ${model}.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+
+    if (!response.ok) {
+      const rawBody = await response.text();
+      const detail = this.extractVeniceErrorDetail(rawBody);
+      const statusHint = this.veniceStatusHint(response.status);
+      const pieces = [
+        `Venice request failed with status ${response.status} using model ${model}.`,
+        detail,
+        statusHint
+      ].filter(Boolean);
+
+      const error = new Error(pieces.join(" "));
+      (error as { statusCode?: number; body?: unknown }).statusCode = response.status;
+      (error as { statusCode?: number; body?: unknown }).body = rawBody;
+      throw error;
+    }
+
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
+    };
+    const content = payload.choices?.[0]?.message?.content;
+
+    if (typeof content === "string" && content.trim()) {
+      return content.trim();
+    }
+
+    if (Array.isArray(content)) {
+      const joined = content
+        .map((item) => item.text?.trim() || "")
+        .filter(Boolean)
+        .join("\n");
+
+      if (joined) {
+        return joined;
+      }
+    }
+
+    throw new Error(`Venice returned an empty response using model ${model}.`);
+  }
+
+  private extractVeniceErrorDetail(rawBody: string): string | undefined {
+    const trimmed = rawBody.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        error?: { message?: string; code?: string; type?: string } | string;
+        message?: string;
+      };
+
+      if (typeof parsed.error === "string" && parsed.error.trim()) {
+        return `${parsed.error.trim()}.`;
+      }
+
+      if (typeof parsed.error === "object" && parsed.error) {
+        const providerMessage = parsed.error.message;
+        const providerCode = parsed.error.code || parsed.error.type;
+
+        if (providerMessage && providerCode) {
+          return `${providerMessage} (code: ${providerCode}).`;
+        }
+
+        if (providerMessage) {
+          return `${providerMessage}.`;
+        }
+      }
+
+      if (parsed.message?.trim()) {
+        return `${parsed.message.trim()}.`;
+      }
+    } catch {
+      // Ignore parse errors and return a raw snippet.
+    }
+
+    const snippet = trimmed.replace(/\s+/g, " ").slice(0, 240);
+    return snippet ? `Provider response: ${snippet}` : undefined;
+  }
+
+  private veniceStatusHint(status: number): string | undefined {
+    if (status === 401 || status === 403) {
+      return "Check VENICE_API_KEY permissions.";
+    }
+
+    if (status === 429) {
+      return "Venice rate limit reached; try again shortly.";
+    }
+
+    if (status >= 500) {
+      return "Venice is reporting a server-side failure; retry shortly.";
+    }
+
+    return undefined;
+  }
+
   private async runOpenRouterChat(messages: RouterMessage[], userId: string, model: string): Promise<string> {
     if (!this.config.openRouterApiKey) {
       throw new Error("OPENROUTER_API_KEY is missing, so AI chat is unavailable.");
@@ -1458,6 +1574,10 @@ export class AiService {
 
   private resolveOpenRouterModel(): string {
     return this.config.openRouterModel;
+  }
+
+  private resolveVeniceModel(_preferences: UserPreferences): string {
+    return this.config.veniceModel || VENICE_DEFAULT_MODEL;
   }
 
   private resolveHuggingFaceModel(preferences: UserPreferences): string {

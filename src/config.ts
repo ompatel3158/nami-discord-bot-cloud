@@ -42,6 +42,8 @@ export interface AppConfig {
   discordToken: string;
   discordClientId: string;
   discordGuildId?: string;
+  veniceApiKey?: string;
+  veniceModel: string;
   huggingFaceApiKey?: string;
   huggingFaceModel: string;
   openRouterApiKey?: string;
@@ -109,12 +111,15 @@ export function loadConfig(): AppConfig {
     discordToken: requiredEnv("DISCORD_TOKEN"),
     discordClientId: requiredEnv("DISCORD_CLIENT_ID"),
     discordGuildId: process.env.DISCORD_GUILD_ID?.trim() || undefined,
+    veniceApiKey:
+      process.env.VENICE_API_KEY?.trim() || process.env.VENICE_INFERENCE_KEY?.trim() || undefined,
+    veniceModel: process.env.VENICE_MODEL?.trim() || "venice-uncensored",
     huggingFaceApiKey:
       process.env.HUGGINGFACE_API_KEY?.trim() || process.env.HF_API_KEY?.trim() || undefined,
     huggingFaceModel:
       process.env.HUGGINGFACE_MODEL?.trim() || "dphn/Dolphin-Mistral-24B-Venice-Edition",
     openRouterApiKey: process.env.OPENROUTER_API_KEY?.trim() || undefined,
-    openRouterModel: process.env.OPENROUTER_MODEL?.trim() || "google/gemma-3-27b-it:free",
+    openRouterModel: process.env.OPENROUTER_MODEL?.trim() || "nvidia/nemotron-3-super-120b-a12b:free",
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY?.trim() || undefined,
     elevenLabsApiKeyFallback: process.env.ELEVENLABS_API_KEY_FALLBACK?.trim() || undefined,
     elevenLabsDefaultVoiceId:

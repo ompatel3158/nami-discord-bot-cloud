@@ -29,7 +29,7 @@ const featureChoices: Array<{ name: string; value: FeatureFlag }> = [
 
 const modelChoices: Array<{ name: string; value: AiModelMode }> = [
   { name: "Smart (default)", value: "smart" },
-  { name: "Uncensored (Gemma HauhauCS)", value: "uncensored" }
+  { name: "Uncensored (Venice)", value: "uncensored" }
 ];
 
 function requireFeature(interaction: ChatInputCommandInteraction, storage: AppStorage, feature: FeatureFlag): void {
@@ -51,7 +51,7 @@ export function createCommands(): BotCommand[] {
       .addBooleanOption((option) => option.setName("web").setDescription("Let Nami search the web before answering.").setRequired(false)),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "ai");
-      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY or HUGGINGFACE_API_KEY.");
+      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode).");
       const guildId = requireGuildId(interaction);
       const settings = context.storage.getGuildSettings(guildId);
       const preferences = context.storage.getUserPreferences(interaction.user.id);
@@ -72,7 +72,7 @@ export function createCommands(): BotCommand[] {
       .addStringOption((option) => option.setName("query").setDescription("What should Nami search for?").setRequired(true)),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "search");
-      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY or HUGGINGFACE_API_KEY.");
+      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode).");
       const query = interaction.options.getString("query", true);
       const preferences = context.storage.getUserPreferences(interaction.user.id);
       await respond(interaction, "Searching the web...", { defer: true });
@@ -480,7 +480,7 @@ export function createCommands(): BotCommand[] {
       await respond(interaction, [
         "**Nami command guide**",
         "`/ask prompt:<text> web:<true|false>` - AI answers, optionally with web search",
-        "`/preferences model mode:<smart|uncensored>` - switch AI model mode",
+        "`/preferences model mode:<smart|uncensored>` - switch AI mode (smart=OpenRouter, uncensored=Venice)",
         "`@Nami <message>` - chat naturally by mentioning the bot in a server",
         "`/search query:<text>` - web search summary with source links",
         "`/preferences ...` - your voice IDs, speed, model mode, language, and default search",

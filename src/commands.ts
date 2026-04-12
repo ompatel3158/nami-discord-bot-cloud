@@ -62,7 +62,7 @@ export function createCommands(): BotCommand[] {
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "ai");
       if (!context.ai) {
-        throw new Error("OPENROUTER_API_KEY is missing, so AI replies are not available yet.");
+        throw new Error("OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode) are required for AI replies.");
       }
       const guildId = requireGuildId(interaction);
       const settings = context.storage.getGuildSettings(guildId);
@@ -104,7 +104,7 @@ export function createCommands(): BotCommand[] {
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "search");
       if (!context.ai) {
-        throw new Error("OPENROUTER_API_KEY is missing, so web search is not available yet.");
+        throw new Error("OPENROUTER_API_KEY is required for smart-mode web search summaries.");
       }
       const query = interaction.options.getString("query", true);
       const preferences = context.storage.getUserPreferences(interaction.user.id);

@@ -9,6 +9,8 @@ services:
       - key: NODE_ENV
         value: production
       - key: OPENROUTER_MODEL
-        value: google/gemma-4-31b-it:free
+        value: nvidia/nemotron-3-super-120b-a12b:free
+      - key: VENICE_MODEL
+        value: venice-uncensored
       - key: ELEVENLABS_MODEL_ID
         value: eleven_flash_v2_5

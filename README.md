@@ -4,7 +4,7 @@ Nami is a modular Discord bot built with `discord.js` and TypeScript.
 
 It supports:
 
-- AI Q&A through Hugging Face (primary) with OpenRouter fallback
+- AI Q&A through OpenRouter for smart mode and Venice for uncensored mode
 - Chat-style replies when users mention `@Nami`
 - Web search summaries using DuckDuckGo search results plus AI summarization
 - Text games like guessing, trivia, scramble, rock-paper-scissors, and coinflip
@@ -21,7 +21,7 @@ It supports:
 - TypeScript
 - `discord.js`
 - `@discordjs/voice`
-- Hugging Face Inference API for primary model chat
+- Venice chat completions API for uncensored model chat
 - OpenRouter for text generation
 - DuckDuckGo HTML search for free web search results
 - ElevenLabs for text-to-speech
@@ -49,10 +49,10 @@ It supports:
 DISCORD_TOKEN=your_discord_bot_token
 DISCORD_CLIENT_ID=your_discord_application_id
 DISCORD_GUILD_ID=optional_guild_id_for_fast_dev_command_registration
-HUGGINGFACE_API_KEY=optional_huggingface_api_key
-HUGGINGFACE_MODEL=dphn/Dolphin-Mistral-24B-Venice-Edition
+VENICE_API_KEY=your_venice_api_key
+VENICE_MODEL=venice-uncensored
 OPENROUTER_API_KEY=your_openrouter_api_key
-OPENROUTER_MODEL=google/gemma-4-31b-it:free
+OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 ELEVENLABS_API_KEY=your_elevenlabs_api_key
 ELEVENLABS_API_KEY_FALLBACK=optional_backup_elevenlabs_key
 ELEVENLABS_DEFAULT_VOICE_ID=
@@ -113,8 +113,8 @@ If your local IP is rate-limited or blocked by provider anti-abuse checks, deplo
    - `DISCORD_TOKEN`
    - `DISCORD_CLIENT_ID`
    - `DISCORD_GUILD_ID` (recommended for fast command updates)
-   - `HUGGINGFACE_API_KEY` (recommended)
-   - `HUGGINGFACE_MODEL`
+   - `VENICE_API_KEY` (required for uncensored mode)
+   - `VENICE_MODEL` (default `venice-uncensored`)
    - `OPENROUTER_API_KEY`
    - `OPENROUTER_MODEL`
    - `ELEVENLABS_API_KEY`
@@ -142,7 +142,7 @@ Both return JSON status including bot readiness and TTS availability.
 - `@Nami your message`: Chat naturally by mentioning the bot in a server
 - `/search query:<text>`: Search the web and summarize results
 - `/preferences view|voice|search|language|reset`: Manage personal preferences
-- `/preferences model mode:<smart|uncensored>`: Switch between the default smart model and uncensored Gemma HauhauCS model
+- `/preferences model mode:<smart|uncensored>`: Smart mode uses OpenRouter, uncensored mode uses Venice
 - `/preferences voices`: List provider voices and Google/Gemini voices
 - `/game guess-start|guess-pick|trivia|scramble|rps|coinflip`: Play text games
 - `/voice join|leave|auto-read|autojoin|language`: Voice controls plus automatic VC speech options

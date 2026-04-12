@@ -13,7 +13,7 @@ const storage = new AppStorage();
 const games = new GameService();
 const ai =
   config.openRouterApiKey ||
-  config.huggingFaceApiKey ||
+  config.veniceApiKey ||
   config.elevenLabsApiKey ||
   config.geminiApiKey
     ? new AiService(config)
