@@ -19,9 +19,9 @@ interface AskOptions {
   userId: string;
 }
 
-const UNCENSORED_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free";
 const OPENROUTER_FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const HUGGINGFACE_DEFAULT_MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition";
+const HUGGINGFACE_UNCENSORED_MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition";
 const GEMINI_TTS_DEFAULT_MODEL = "gemini-2.5-flash-preview-tts";
 const GEMINI_TTS_DEFAULT_VOICE = "Kore";
 const GEMINI_PREBUILT_VOICES = [
@@ -306,14 +306,16 @@ export class AiService {
     userId: string,
     preferences: UserPreferences
   ): Promise<string> {
+    const isUncensoredMode = preferences.modelMode === "uncensored";
+    const huggingFaceModel = this.resolveHuggingFaceModel(preferences);
     const shouldPreferHuggingFace = Boolean(this.config.huggingFaceApiKey);
 
     if (shouldPreferHuggingFace) {
       try {
-        return await this.runHuggingFaceChat(messages, userId);
+        return await this.runHuggingFaceChat(messages, userId, huggingFaceModel);
       } catch (error) {
         const normalized = error instanceof Error ? error : new Error(String(error));
-        if (!this.config.openRouterApiKey) {
+        if (isUncensoredMode || !this.config.openRouterApiKey) {
           throw normalized;
         }
         console.warn(
@@ -322,12 +324,18 @@ export class AiService {
       }
     }
 
+    if (isUncensoredMode) {
+      throw new Error(
+        "Uncensored mode is pinned to Hugging Face. Configure HUGGINGFACE_API_KEY and try again."
+      );
+    }
+
     if (this.config.openRouterApiKey) {
-      return this.runOpenRouterChat(messages, userId, this.resolveModel(preferences));
+      return this.runOpenRouterChat(messages, userId, this.resolveOpenRouterModel());
     }
 
     if (this.config.huggingFaceApiKey) {
-      return this.runHuggingFaceChat(messages, userId);
+      return this.runHuggingFaceChat(messages, userId, huggingFaceModel);
     }
 
     throw new Error("No AI text provider is configured. Set OPENROUTER_API_KEY or HUGGINGFACE_API_KEY.");
@@ -987,11 +995,11 @@ export class AiService {
     return body.replace(/\s+/g, " ").trim().slice(0, 220);
   }
 
-  private async runHuggingFaceChat(messages: RouterMessage[], userId: string): Promise<string> {
+  private async runHuggingFaceChat(messages: RouterMessage[], userId: string, model: string): Promise<string> {
     let chatCompletionsError: Error | undefined;
 
     try {
-      return await this.requestHuggingFaceChatCompletions(messages, userId);
+      return await this.requestHuggingFaceChatCompletions(messages, userId, model);
     } catch (error) {
       chatCompletionsError = error instanceof Error ? error : new Error(String(error));
       console.warn(
@@ -1000,7 +1008,7 @@ export class AiService {
     }
 
     try {
-      return await this.requestHuggingFaceTextGeneration(messages);
+      return await this.requestHuggingFaceTextGeneration(messages, model);
     } catch (fallbackError) {
       const normalizedFallback = fallbackError instanceof Error
         ? fallbackError
@@ -1016,13 +1024,13 @@ export class AiService {
 
   private async requestHuggingFaceChatCompletions(
     messages: RouterMessage[],
-    userId: string
+    userId: string,
+    model: string
   ): Promise<string> {
     if (!this.config.huggingFaceApiKey) {
       throw new Error("HUGGINGFACE_API_KEY is missing, so Hugging Face chat is unavailable.");
     }
 
-    const model = this.config.huggingFaceModel || HUGGINGFACE_DEFAULT_MODEL;
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), 45_000);
 
@@ -1089,12 +1097,11 @@ export class AiService {
     throw new Error(`Hugging Face returned an empty response using model ${model}.`);
   }
 
-  private async requestHuggingFaceTextGeneration(messages: RouterMessage[]): Promise<string> {
+  private async requestHuggingFaceTextGeneration(messages: RouterMessage[], model: string): Promise<string> {
     if (!this.config.huggingFaceApiKey) {
       throw new Error("HUGGINGFACE_API_KEY is missing, so Hugging Face chat is unavailable.");
     }
 
-    const model = this.config.huggingFaceModel || HUGGINGFACE_DEFAULT_MODEL;
     const response = await fetch(
       `https://api-inference.huggingface.co/models/${encodeURIComponent(model)}`,
       {
@@ -1208,9 +1215,7 @@ export class AiService {
       throw new Error("OPENROUTER_API_KEY is missing, so AI chat is unavailable.");
     }
 
-    const shouldUseSmartFallback =
-      model !== UNCENSORED_MODEL &&
-      model !== OPENROUTER_FALLBACK_MODEL;
+    const shouldUseSmartFallback = model !== OPENROUTER_FALLBACK_MODEL;
 
     const modelsToTry = shouldUseSmartFallback
       ? [model, OPENROUTER_FALLBACK_MODEL]
@@ -1372,11 +1377,16 @@ export class AiService {
     return undefined;
   }
 
-  private resolveModel(preferences: UserPreferences): string {
-    if (preferences.modelMode === "uncensored") {
-      return UNCENSORED_MODEL;
-    }
+  private resolveOpenRouterModel(): string {
     return this.config.openRouterModel;
+  }
+
+  private resolveHuggingFaceModel(preferences: UserPreferences): string {
+    if (preferences.modelMode === "uncensored") {
+      return HUGGINGFACE_UNCENSORED_MODEL;
+    }
+
+    return this.config.huggingFaceModel || HUGGINGFACE_DEFAULT_MODEL;
   }
 
   private async fetchSearchResults(query: string): Promise<SearchSnippet[]> {
