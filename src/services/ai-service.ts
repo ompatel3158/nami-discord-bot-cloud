@@ -21,7 +21,7 @@ interface AskOptions {
 
 const OPENROUTER_FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const HUGGINGFACE_DEFAULT_MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition";
-const HUGGINGFACE_UNCENSORED_MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition";
+const HUGGINGFACE_UNCENSORED_MODEL = "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive";
 const GEMINI_TTS_DEFAULT_MODEL = "gemini-2.5-flash-preview-tts";
 const GEMINI_TTS_DEFAULT_VOICE = "Kore";
 const GEMINI_PREBUILT_VOICES = [

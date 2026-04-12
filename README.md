@@ -11,6 +11,7 @@ It supports:
 - Text-to-speech in voice channels with ElevenLabs primary + Gemini (Google) fallback
 - Per-user preferences for ElevenLabs voice ID, Google voice name, speed, language, and AI reply style
 - Per-user model mode switch (smart vs uncensored)
+- Server-level TTS language for both `/tts say` and auto voice read
 - Optional auto voice reading in VC with auto-join include/exclude controls
 - Admin controls for feature flags, prompts, announcements, and history cleanup
 
@@ -133,12 +134,12 @@ Both return JSON status including bot readiness and TTS availability.
 - `@Nami your message`: Chat naturally by mentioning the bot in a server
 - `/search query:<text>`: Search the web and summarize results
 - `/preferences view|voice|search|language|reset`: Manage personal preferences
-- `/preferences model mode:<smart|uncensored>`: Switch between the default smart model and uncensored Dolphin Mistral
+- `/preferences model mode:<smart|uncensored>`: Switch between the default smart model and uncensored Gemma HauhauCS model
 - `/preferences voices`: List provider voices and Google/Gemini voices
 - `/game guess-start|guess-pick|trivia|scramble|rps|coinflip`: Play text games
-- `/voice join|leave|auto-read|autojoin`: Voice controls plus automatic VC speech options
+- `/voice join|leave|auto-read|autojoin|language`: Voice controls plus automatic VC speech options
 - `/tts say|stop|voices`: Speak text with available TTS providers (ElevenLabs or Gemini fallback)
-- `/admin feature|system-prompt|announce|clear-history|set-announcements`: Server-level management
+- `/admin feature|system-prompt|announce|clear-history|set-announcements|tts-language`: Server-level management
 
 ## Notes
 
@@ -146,6 +147,7 @@ Both return JSON status including bot readiness and TTS availability.
 - Generated TTS files are created temporarily under `data/audio` and cleaned up after playback.
 - `/tts voices` shows provider voice IDs and Google/Gemini voice names.
 - Google/Gemini voice can be set via `/preferences voice google_voice:<name|auto>`. `auto` picks a default voice based on your preferred language.
+- TTS speech language now defaults to server-level Hindi. Change it with `/voice language value:<language>` or `/admin tts-language value:<language>`.
 - As of April 10, 2026, OpenRouter free models and ElevenLabs plans can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
 - Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.

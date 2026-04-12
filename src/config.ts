@@ -19,6 +19,7 @@ export const DEFAULT_GUILD_SETTINGS: GuildSettings = {
   }, {} as Record<FeatureFlag, boolean>),
   systemPrompt:
     "You are Nami, a friendly Discord bot. Be chatty, helpful, clear, and practical. Keep replies readable inside Discord.",
+  ttsLanguage: "Hindi",
   announcementChannelId: undefined,
   autoVoiceReadEnabled: false,
   autoVoiceJoinEnabled: false,

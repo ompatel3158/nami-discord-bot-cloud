@@ -29,7 +29,7 @@ const featureChoices: Array<{ name: string; value: FeatureFlag }> = [
 
 const modelChoices: Array<{ name: string; value: AiModelMode }> = [
   { name: "Smart (default)", value: "smart" },
-  { name: "Uncensored (Dolphin Mistral)", value: "uncensored" }
+  { name: "Uncensored (Gemma HauhauCS)", value: "uncensored" }
 ];
 
 function requireFeature(interaction: ChatInputCommandInteraction, storage: AppStorage, feature: FeatureFlag): void {
@@ -245,6 +245,8 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) => subcommand.setName("leave").setDescription("Leave the current voice channel."))
       .addSubcommand((subcommand) => subcommand.setName("auto-read").setDescription("Automatically read chat messages in VC.")
         .addBooleanOption((option) => option.setName("enabled").setDescription("Enable or disable auto-read").setRequired(true)))
+      .addSubcommand((subcommand) => subcommand.setName("language").setDescription("Set server language for TTS and auto-read.")
+        .addStringOption((option) => option.setName("value").setDescription("Example: Hindi, English").setRequired(true)))
       .addSubcommand((subcommand) => subcommand.setName("autojoin").setDescription("Auto-join voice when someone types in chat.")
         .addStringOption((option) => option.setName("action").setDescription("What to update").setRequired(true).addChoices(
           { name: "Enable auto-join", value: "enable" },
@@ -270,11 +272,27 @@ export function createCommands(): BotCommand[] {
       }
       if (subcommand === "auto-read") {
         const enabled = interaction.options.getBoolean("enabled", true);
-        context.storage.updateGuildSettings(guildId, (current) => {
+        const settings = context.storage.updateGuildSettings(guildId, (current) => {
           current.autoVoiceReadEnabled = enabled;
           return current;
         });
-        await respond(interaction, `Auto-read is now **${enabled ? "enabled" : "disabled"}** for this server.`);
+        await respond(interaction, `Auto-read is now **${enabled ? "enabled" : "disabled"}** for this server. Language: **${settings.ttsLanguage}**.`);
+        return;
+      }
+      if (subcommand === "language") {
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+          throw new Error("You need Manage Server permission to change the server TTS language.");
+        }
+        const value = interaction.options.getString("value", true).trim();
+        const settings = context.storage.updateGuildSettings(guildId, (current) => {
+          current.ttsLanguage = value;
+          return current;
+        });
+        await respond(
+          interaction,
+          `Server TTS language is now **${settings.ttsLanguage}**. This affects both /tts say and voice auto-read.`,
+          { ephemeral: true }
+        );
         return;
       }
       if (subcommand === "autojoin") {
@@ -320,6 +338,7 @@ export function createCommands(): BotCommand[] {
           "Auto-join settings updated.",
           `Enabled: **${settings.autoVoiceJoinEnabled ? "yes" : "no"}**`,
           `Auto-read: **${settings.autoVoiceReadEnabled ? "yes" : "no"}**`,
+          `TTS language: **${settings.ttsLanguage}**`,
           `Included VCs: ${includeList}`,
           `Excluded VCs: ${excludeList}`
         ].join("\n"));
@@ -358,6 +377,7 @@ export function createCommands(): BotCommand[] {
         return;
       }
       const guildId = requireGuildId(interaction);
+      const guildSettings = context.storage.getGuildSettings(guildId);
       if (subcommand === "stop") {
         await context.voicePlayer.stop(guildId);
         await respond(interaction, "Stopped speaking and cleared the queue.");
@@ -386,13 +406,13 @@ export function createCommands(): BotCommand[] {
         text,
         elevenLabsVoice,
         geminiVoice: googleVoice,
-        language: preferences.language,
+        language: guildSettings.ttsLanguage,
         speed,
         userId: interaction.user.id
       });
       const queueDepth = await context.voicePlayer.enqueue(member, filePath, speed);
       const queueMessage = queueDepth > 1 ? `Queued. There are **${queueDepth - 1}** item(s) ahead of this one.` : "Playing now.";
-      await respond(interaction, `${queueMessage}\nElevenLabs voice: **${elevenLabsVoice || "default"}**\nGoogle voice: **${googleVoice || "auto"}**\nSpeed: **${speed}x**.`);
+      await respond(interaction, `${queueMessage}\nElevenLabs voice: **${elevenLabsVoice || "default"}**\nGoogle voice: **${googleVoice || "auto"}**\nLanguage: **${guildSettings.ttsLanguage}**\nSpeed: **${speed}x**.`);
     }
   };
 
@@ -409,7 +429,9 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) => subcommand.setName("clear-history").setDescription("Clear saved AI chat history.")
         .addUserOption((option) => option.setName("user").setDescription("Optional: clear one user's history only").setRequired(false)))
       .addSubcommand((subcommand) => subcommand.setName("set-announcements").setDescription("Save the default announcement channel.")
-        .addChannelOption((option) => option.setName("channel").setDescription("Default announcement channel").addChannelTypes(ChannelType.GuildText).setRequired(true))),
+        .addChannelOption((option) => option.setName("channel").setDescription("Default announcement channel").addChannelTypes(ChannelType.GuildText).setRequired(true)))
+      .addSubcommand((subcommand) => subcommand.setName("tts-language").setDescription("Set server language for TTS and auto-read.")
+        .addStringOption((option) => option.setName("value").setDescription("Example: Hindi, English").setRequired(true))),
     async execute(interaction, context) {
       const guildId = requireGuildId(interaction);
       const subcommand = interaction.options.getSubcommand();
@@ -429,6 +451,15 @@ export function createCommands(): BotCommand[] {
         const channel = interaction.options.getChannel("channel", true);
         context.storage.updateGuildSettings(guildId, (current) => { current.announcementChannelId = channel.id; return current; });
         await respond(interaction, `Default announcements will go to <#${channel.id}>.`); return;
+      }
+      if (subcommand === "tts-language") {
+        const value = interaction.options.getString("value", true).trim();
+        context.storage.updateGuildSettings(guildId, (current) => {
+          current.ttsLanguage = value;
+          return current;
+        });
+        await respond(interaction, `Server TTS language set to **${value}** for /tts say and auto-read.`);
+        return;
       }
       if (subcommand === "announce") {
         const configured = context.storage.getGuildSettings(guildId).announcementChannelId;
@@ -453,12 +484,13 @@ export function createCommands(): BotCommand[] {
         "`@Nami <message>` - chat naturally by mentioning the bot in a server",
         "`/search query:<text>` - web search summary with source links",
         "`/preferences ...` - your voice IDs, speed, model mode, language, and default search",
+        "`/voice language value:<language>` - set server TTS/auto-read language (Manage Server required)",
         "`/memory view`, `/memory clear` - see or clear remembered conversation",
         "`/voice auto-read`, `/voice autojoin` - automatic VC speech behavior",
         "`/tts voices` - list provider voices plus Google/Gemini voice names",
         "`/game guess-start`, `/game guess-pick`, `/game trivia`, `/game scramble`, `/game rps`, `/game coinflip`",
         "`/voice join`, `/voice leave`, `/tts say`, `/tts stop` - voice chat controls",
-        "`/admin ...` - feature flags, prompts, announcements, and history cleanup"
+        "`/admin ...` - feature flags, prompts, announcements, TTS language, and history cleanup"
       ].join("\n"), { ephemeral: true });
     }
   };

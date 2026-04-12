@@ -177,7 +177,7 @@ client.on(Events.MessageCreate, async (message) => {
               text: speechText,
               elevenLabsVoice: preferences.voice,
               geminiVoice: preferences.geminiVoice,
-              language: preferences.language,
+              language: settings.ttsLanguage,
               speed: preferences.ttsSpeed,
               userId: message.author.id
             });

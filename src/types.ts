@@ -6,6 +6,7 @@ export type TtsVoice = string;
 export interface GuildSettings {
   features: Record<FeatureFlag, boolean>;
   systemPrompt: string;
+  ttsLanguage: string;
   announcementChannelId?: string;
   autoVoiceReadEnabled: boolean;
   autoVoiceJoinEnabled: boolean;
