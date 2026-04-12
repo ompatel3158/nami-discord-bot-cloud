@@ -160,4 +160,15 @@ Both return JSON status including bot readiness and TTS availability.
 - Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.
 
+## Pinger Site (Vercel)
+
+This repo includes a lightweight website in `pinger-site` that can send GET requests to your Render URL at random intervals between 1 and 10 seconds.
+
+Deploy only that folder to Vercel:
+
+```bash
+cd pinger-site
+npx vercel --prod
+```
+
 

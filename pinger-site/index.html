@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nami Keepalive Pinger</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-left" aria-hidden="true"></div>
+    <div class="bg-shape bg-shape-right" aria-hidden="true"></div>
+
+    <main class="card">
+      <p class="tag">Render Keepalive</p>
+      <h1>Nami Pinger</h1>
+      <p class="subtitle">
+        Automatic pings run from GitHub Actions every 5 minutes, so requests continue even when this page is closed. Each run waits a random 1-10 seconds before pinging.
+      </p>
+
+      <section class="targets">
+        <label for="targetUrl">Current Target URL</label>
+        <input
+          id="targetUrl"
+          type="url"
+          value="https://nami-discord-bot.onrender.com/health"
+          spellcheck="false"
+          autocomplete="off"
+          readonly
+        />
+        <p class="hint">Automatic schedule target is set in GitHub Actions workflow: .github/workflows/ping-render.yml.</p>
+      </section>
+
+      <section class="stats">
+        <article>
+          <span>Manual Sent</span>
+          <strong id="sentCount">0</strong>
+        </article>
+        <article>
+          <span>Manual Failed</span>
+          <strong id="failedCount">0</strong>
+        </article>
+        <article>
+          <span>Auto Schedule</span>
+          <strong id="scheduleLabel">Every 5 minutes</strong>
+        </article>
+      </section>
+
+      <section class="actions">
+        <button id="triggerBtn" class="btn btn-primary" type="button">Send Manual Ping</button>
+        <button id="clearBtn" class="btn btn-ghost" type="button">Clear Log</button>
+      </section>
+
+      <p id="status" class="status idle">Background auto ping runs via GitHub Actions.</p>
+
+      <section class="log-wrap">
+        <div class="log-head">
+          <h2>Request Log</h2>
+        </div>
+        <ol id="logList" class="log-list"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
