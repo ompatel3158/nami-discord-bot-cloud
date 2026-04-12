@@ -122,8 +122,8 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) =>
         subcommand
           .setName("voice")
-          .setDescription("Set your preferred ElevenLabs voice ID and TTS tuning.")
-          .addStringOption((option) => option.setName("voice_id").setDescription("Voice ID from ElevenLabs or 'default'").setRequired(true))
+          .setDescription("Set your preferred Cartesia voice ID and TTS tuning.")
+          .addStringOption((option) => option.setName("voice_id").setDescription("Voice ID from Cartesia or 'default'").setRequired(true))
           .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.25 to 4.0"))
           .addStringOption((option) => option.setName("instructions").setDescription("Saved speech notes for your own reference"))
       )
@@ -309,22 +309,22 @@ export function createCommands(): BotCommand[] {
   const tts: BotCommand = {
     data: new SlashCommandBuilder()
       .setName("tts")
-      .setDescription("Speak text in voice chat using ElevenLabs voices.")
+      .setDescription("Speak text in voice chat using Cartesia voices.")
       .addSubcommand((subcommand) =>
         subcommand
           .setName("say")
           .setDescription("Speak a message in your voice channel.")
           .addStringOption((option) => option.setName("text").setDescription("What should Nami say?").setRequired(true))
-          .addStringOption((option) => option.setName("voice").setDescription("ElevenLabs voice ID or leave blank for your saved default"))
+          .addStringOption((option) => option.setName("voice").setDescription("Cartesia voice ID or leave blank for your saved default"))
           .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.25 to 4.0"))
           .addStringOption((option) => option.setName("instructions").setDescription("Saved speech notes for your own reference"))
       )
       .addSubcommand((subcommand) => subcommand.setName("stop").setDescription("Stop speaking and clear the queue."))
-      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List the voices available on your ElevenLabs account.")),
+      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List the voices available on your Cartesia account.")),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "tts");
       if (!context.ai || !context.voice) {
-        throw new Error("ELEVENLABS_API_KEY is missing, so AI text-to-speech is not available yet.");
+        throw new Error("CARTESIA_API_KEY is missing, so AI text-to-speech is not available yet.");
       }
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "voices") {
@@ -333,7 +333,7 @@ export function createCommands(): BotCommand[] {
           .slice(0, 15)
           .map((voiceInfo) => `- **${voiceInfo.name}** (\`${voiceInfo.id}\`) [${voiceInfo.category}]`)
           .join("\n");
-        await respond(interaction, `Available voices:\n${list || "No voices were returned by ElevenLabs."}`, { ephemeral: true });
+        await respond(interaction, `Available voices:\n${list || "No voices were returned by Cartesia."}`, { ephemeral: true });
         return;
       }
       const guildId = requireGuildId(interaction);
@@ -351,8 +351,7 @@ export function createCommands(): BotCommand[] {
       await respond(interaction, "Generating speech...", { defer: true });
       const filePath = await context.ai.synthesizeSpeech({
         text,
-        elevenLabsVoice: voiceId,
-        geminiVoice: preferences.geminiVoice,
+        voiceId,
         language: preferences.language,
         speed,
         userId: interaction.user.id
@@ -469,7 +468,7 @@ export function createCommands(): BotCommand[] {
           "`@Nami <message>` - chat naturally by mentioning the bot in a server",
           "`/search query:<text>` - web search summary with source links",
           "`/preferences ...` - your voice ID, speed, language, answer style, and default search",
-          "`/tts voices` - list the ElevenLabs voice IDs available to your API key",
+          "`/tts voices` - list the Cartesia voice IDs available to your API key",
           "`/game guess-start`, `/game guess-pick`, `/game trivia`, `/game scramble`, `/game rps`, `/game coinflip`",
           "`/voice join`, `/voice leave`, `/tts say`, `/tts stop` - voice chat controls",
           "`/admin ...` - feature flags, prompts, announcements, and history cleanup"

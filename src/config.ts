@@ -29,7 +29,6 @@ export const DEFAULT_GUILD_SETTINGS: GuildSettings = {
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   voice: "default",
-  geminiVoice: "auto",
   ttsInstructions: "Friendly, clear, and natural.",
   ttsSpeed: 1,
   aiStyle: "Friendly, practical, and easy to understand.",

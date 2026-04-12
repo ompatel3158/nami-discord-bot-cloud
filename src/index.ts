@@ -60,8 +60,7 @@ const games = new GameService();
 const ai =
   config.openRouterApiKey ||
   config.veniceApiKey ||
-  config.elevenLabsApiKey ||
-  config.geminiApiKey
+  config.cartesiaApiKey
     ? new AiService(config)
     : null;
 const voicePlayer = new VoiceService();
@@ -270,8 +269,7 @@ client.on(Events.MessageCreate, async (message) => {
 
             const filePath = await context.ai.synthesizeSpeech({
               text: speechText,
-              elevenLabsVoice: preferences.voice,
-              geminiVoice: preferences.geminiVoice,
+              voiceId: preferences.voice,
               language: settings.ttsLanguage,
               speed: preferences.ttsSpeed,
               userId: message.author.id
@@ -400,15 +398,15 @@ async function runStartupChecks(): Promise<void> {
   }
 
   try {
-    const status = await context.ai.runElevenLabsStartupCheck();
+    const status = await context.ai.runTtsStartupCheck();
     console.log(`[Startup] ${status}`);
     if (!context.ai.isTtsAvailable()) {
       console.log("[Startup] No TTS provider is enabled; TTS commands and auto-read will be skipped.");
-    } else if (!context.ai.isElevenLabsTtsAvailable()) {
-      console.log("[Startup] ElevenLabs is unavailable, but alternate TTS remains enabled.");
+    } else if (context.ai.isCartesiaTtsAvailable()) {
+      console.log("[Startup] Cartesia TTS is active.");
     }
   } catch (error) {
-    console.error("[Startup] ElevenLabs startup check failed", error);
+    console.error("[Startup] TTS startup check failed", error);
   }
 }
 

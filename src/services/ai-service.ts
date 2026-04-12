@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { AUDIO_DIR, ROOT_DIR, type AppConfig } from "../config.js";
+import { CartesiaService } from "./cartesia-service.js";
 import type {
   Citation,
   ConversationMessage,
@@ -112,8 +113,7 @@ const NAMI_FIXED_PERSONALITY_PROMPT = [
 
 interface SpeechOptions {
   text: string;
-  elevenLabsVoice: TtsVoice;
-  geminiVoice: string;
+  voiceId: TtsVoice;
   language: string;
   speed: number;
   userId: string;
@@ -146,6 +146,9 @@ type GeminiGenerateContentResponse = {
 };
 
 export class AiService {
+  private readonly cartesiaService: CartesiaService;
+  private cartesiaTtsAvailable: boolean;
+  private cartesiaDisableReason: string | undefined;
   private elevenLabsTtsAvailable: boolean;
   private elevenLabsDisableReason: string | undefined;
   private geminiTtsAvailable: boolean;
@@ -162,6 +165,12 @@ export class AiService {
 
   constructor(config: AppConfig) {
     this.config = config;
+    this.cartesiaService = new CartesiaService(config);
+    this.cartesiaTtsAvailable = this.cartesiaService.isConfigured();
+    this.cartesiaDisableReason = this.cartesiaTtsAvailable
+      ? undefined
+      : "CARTESIA_API_KEY is not configured.";
+
     this.activeElevenLabsApiKey = config.elevenLabsApiKey;
     this.elevenLabsTtsAvailable = Boolean(config.elevenLabsApiKey);
     this.elevenLabsDisableReason = config.elevenLabsApiKey
@@ -179,8 +188,12 @@ export class AiService {
     return this.elevenLabsTtsAvailable && Boolean(this.activeElevenLabsApiKey);
   }
 
+  isCartesiaTtsAvailable(): boolean {
+    return this.cartesiaTtsAvailable && this.cartesiaService.isConfigured();
+  }
+
   isTtsAvailable(): boolean {
-    return this.isElevenLabsTtsAvailable() || this.canUseGeminiTts();
+    return this.isCartesiaTtsAvailable();
   }
 
   getTtsUnavailableReason(): string | undefined {
@@ -188,7 +201,7 @@ export class AiService {
       return undefined;
     }
 
-    const reasons = [this.elevenLabsDisableReason, this.geminiDisableReason]
+    const reasons = [this.cartesiaDisableReason]
       .filter((value): value is string => Boolean(value && value.trim()));
     if (reasons.length > 0) {
       return reasons.join(" ");
@@ -201,6 +214,12 @@ export class AiService {
     this.elevenLabsTtsAvailable = false;
     this.elevenLabsDisableReason = reason;
     console.warn(`[ElevenLabs] TTS disabled: ${reason}`);
+  }
+
+  private disableCartesiaTts(reason: string): void {
+    this.cartesiaTtsAvailable = false;
+    this.cartesiaDisableReason = reason;
+    console.warn(`[Cartesia] TTS disabled: ${reason}`);
   }
 
   private disableGeminiTts(reason: string): void {
@@ -225,19 +244,43 @@ export class AiService {
     return this.elevenLabsDisableReason;
   }
 
-  async tryRecoverElevenLabsTts(force = false): Promise<string> {
-    if (this.elevenLabsTtsAvailable) {
-      return "ElevenLabs TTS is already enabled.";
+  async runTtsStartupCheck(): Promise<string> {
+    if (!this.cartesiaService.isConfigured()) {
+      this.cartesiaTtsAvailable = false;
+      this.cartesiaDisableReason = "CARTESIA_API_KEY is not configured.";
+      return "Cartesia startup check skipped (CARTESIA_API_KEY missing).";
+    }
+
+    try {
+      await this.cartesiaService.listVoices({ limit: 1 });
+      this.cartesiaTtsAvailable = true;
+      this.cartesiaDisableReason = undefined;
+      return "Cartesia startup check OK.";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.cartesiaTtsAvailable = false;
+      this.cartesiaDisableReason = `Cartesia startup check failed: ${message}`;
+      return this.cartesiaDisableReason;
+    }
+  }
+
+  async tryRecoverTts(force = false): Promise<string> {
+    if (this.isTtsAvailable()) {
+      return "Cartesia TTS is already enabled.";
     }
 
     const now = Date.now();
     if (!force && now - this.lastTtsRecoveryAttemptMs < this.TTS_RECOVERY_COOLDOWN_MS) {
       const secondsLeft = Math.ceil((this.TTS_RECOVERY_COOLDOWN_MS - (now - this.lastTtsRecoveryAttemptMs)) / 1000);
-      return `Skipping ElevenLabs re-check for ${secondsLeft}s to avoid request spam.`;
+      return `Skipping TTS re-check for ${secondsLeft}s to avoid request spam.`;
     }
 
     this.lastTtsRecoveryAttemptMs = now;
-    return this.runElevenLabsStartupCheck();
+    return this.runTtsStartupCheck();
+  }
+
+  async tryRecoverElevenLabsTts(force = false): Promise<string> {
+    return this.tryRecoverTts(force);
   }
 
   async answerQuestion(options: AskOptions): Promise<SearchResult> {
@@ -346,36 +389,68 @@ export class AiService {
   }
 
   private async performSynthesizeSpeech(options: SpeechOptions): Promise<string> {
-    let elevenLabsError: Error | undefined;
-
-    if (this.isElevenLabsTtsAvailable()) {
-      try {
-        return await this.synthesizeWithElevenLabs(options);
-      } catch (error) {
-        const mapped = error instanceof Error ? error : new Error(String(error));
-        elevenLabsError = mapped;
-        if (!this.canUseGeminiTts()) {
-          throw mapped;
-        }
-        console.warn(`[TTS] ElevenLabs failed, falling back to Gemini TTS: ${mapped.message}`);
-      }
+    if (!this.isCartesiaTtsAvailable()) {
+      throw new Error(this.getTtsUnavailableReason() ?? "No TTS provider is currently available.");
     }
 
-    if (this.canUseGeminiTts()) {
-      return this.synthesizeWithGemini(options);
+    try {
+      return await this.synthesizeWithCartesia(options);
+    } catch (error) {
+      const mapped = this.mapCartesiaSpeechError(error);
+      this.disableCartesiaTts(mapped.message);
+      throw mapped;
+    }
+  }
+
+  private async synthesizeWithCartesia(options: SpeechOptions): Promise<string> {
+    const voiceId =
+      options.voiceId && options.voiceId !== "default"
+        ? options.voiceId
+        : this.config.cartesiaDefaultVoiceId;
+
+    const synthesis = await this.cartesiaService.synthesizeOnce({
+      transcript: options.text.slice(0, 3000),
+      voiceId,
+      flush: true,
+      maxBufferDelayMs: this.config.cartesiaMaxBufferDelayMs
+    });
+
+    if (!synthesis.audioBuffer.length) {
+      throw new Error("Cartesia returned an empty audio buffer.");
     }
 
-    if (elevenLabsError) {
-      throw elevenLabsError;
+    const extension = this.detectAudioExtension(synthesis.audioBuffer);
+    const filePath = path.join(AUDIO_DIR, `${Date.now()}-${options.userId}-cartesia-${voiceId}.${extension}`);
+    await fs.writeFile(filePath, synthesis.audioBuffer);
+    this.ttsRequestCountThisSession += 1;
+    return filePath;
+  }
+
+  private detectAudioExtension(buffer: Buffer): "wav" | "mp3" {
+    if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF") {
+      return "wav";
     }
 
-    throw new Error(this.getTtsUnavailableReason() ?? "No TTS provider is currently available.");
+    if (buffer.length >= 3 && buffer.subarray(0, 3).toString("ascii") === "ID3") {
+      return "mp3";
+    }
+
+    if (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) {
+      return "mp3";
+    }
+
+    return "wav";
+  }
+
+  private mapCartesiaSpeechError(error: unknown): Error {
+    const message = error instanceof Error ? error.message : String(error);
+    return new Error(`Cartesia speech request failed. ${message}`);
   }
 
   private async synthesizeWithElevenLabs(options: SpeechOptions): Promise<string> {
     const voiceId =
-      options.elevenLabsVoice && options.elevenLabsVoice !== "default"
-        ? options.elevenLabsVoice
+      options.voiceId && options.voiceId !== "default"
+        ? options.voiceId
         : this.config.elevenLabsDefaultVoiceId;
 
     if (this.config.elevenLabsUsePythonSdk) {
@@ -502,7 +577,7 @@ export class AiService {
       throw new Error("GEMINI_API_KEY is missing, so Gemini speech generation is unavailable.");
     }
 
-    const requestedVoice = this.resolveGeminiVoice(options.geminiVoice, options.language);
+    const requestedVoice = this.resolveGeminiVoice(options.voiceId, options.language);
     const languageFallbackVoice = this.getGeminiVoiceForLanguage(options.language);
 
     try {
@@ -750,77 +825,7 @@ export class AiService {
   }
 
   async runElevenLabsStartupCheck(): Promise<string> {
-    if (!this.activeElevenLabsApiKey) {
-      this.elevenLabsTtsAvailable = false;
-      this.elevenLabsDisableReason = "ELEVENLABS_API_KEY is not configured.";
-      return "ElevenLabs startup check skipped (ELEVENLABS_API_KEY missing).";
-    }
-
-    const checkVoiceId = this.config.elevenLabsDefaultVoiceId;
-    const startupTimeoutMs = 10_000;
-
-    const executeCheck = async (apiKey: string, keyLabel: string): Promise<string> => {
-      try {
-        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timeoutHandle = setTimeout(() => {
-            reject(new Error(`Startup check timeout (${startupTimeoutMs}ms). ElevenLabs not responding.`));
-          }, startupTimeoutMs);
-        });
-
-        const checkResult = await Promise.race([
-          this.requestSpeechNoRetry(
-            checkVoiceId,
-            {
-              text: "Ready.",
-              elevenLabsVoice: checkVoiceId,
-              geminiVoice: this.config.geminiTtsVoice || GEMINI_TTS_DEFAULT_VOICE,
-              language: "English",
-              speed: 1,
-              userId: "startup-check"
-            },
-            apiKey
-          ),
-          timeout
-        ]);
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle);
-        }
-
-        await new Response(checkResult.data).arrayBuffer();
-        this.activeElevenLabsApiKey = apiKey;
-        this.elevenLabsDisableReason = undefined;
-        this.elevenLabsTtsAvailable = true;
-        return `ElevenLabs startup check OK${keyLabel ? ` (${keyLabel})` : ""} using model ${checkResult.usedModelId} and voice ${checkVoiceId}.`;
-      } catch (error) {
-        throw this.mapSpeechError(error, checkVoiceId);
-      }
-    };
-
-    try {
-      return await executeCheck(this.activeElevenLabsApiKey, "primary key");
-    } catch (error) {
-      const status = this.getStatusCode(error);
-
-      // If primary key failed and we have a fallback, try it.
-      if ((status === 401 || status === 402) && this.config.elevenLabsApiKeyFallback && this.config.elevenLabsApiKeyFallback !== this.activeElevenLabsApiKey) {
-        console.log(`[ElevenLabs] Primary key failed (${status}). Trying fallback key...`);
-
-        try {
-          return await executeCheck(this.config.elevenLabsApiKeyFallback, "fallback key");
-        } catch (fallbackError) {
-          const fallbackMessage = this.mapSpeechError(fallbackError, this.config.elevenLabsDefaultVoiceId).message;
-          this.elevenLabsDisableReason = fallbackMessage;
-          this.elevenLabsTtsAvailable = false;
-          return `[Fallback failed] ${fallbackMessage}`;
-        }
-      }
-
-      const message = this.mapSpeechError(error, this.config.elevenLabsDefaultVoiceId).message;
-      this.elevenLabsDisableReason = message;
-      this.elevenLabsTtsAvailable = false;
-      return message;
-    }
+    return this.runTtsStartupCheck();
   }
 
   private async requestSpeechNoRetry(voiceId: string, options: SpeechOptions, apiKeyOverride?: string) {
@@ -884,11 +889,8 @@ export class AiService {
   }
 
   async listVoices(): Promise<Array<{ id: string; name: string; category: string }>> {
-    if (!this.activeElevenLabsApiKey) {
-      if (this.canUseGeminiTts()) {
-        return this.listGeminiVoices();
-      }
-      throw new Error("No TTS voice provider is configured. Set ELEVENLABS_API_KEY or GEMINI_API_KEY.");
+    if (!this.isCartesiaTtsAvailable()) {
+      throw new Error("No TTS voice provider is configured. Set CARTESIA_API_KEY.");
     }
 
     // Return cached voices if still valid
@@ -898,23 +900,10 @@ export class AiService {
     }
 
     try {
-      const response = await fetch("https://api.elevenlabs.io/v1/voices", {
-        method: "GET",
-        headers: {
-          "xi-api-key": this.activeElevenLabsApiKey
-        }
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`ElevenLabs voice lookup failed (${response.status}): ${errorText}`);
-      }
-
-      const payload = (await response.json()) as { voices?: Array<{ voiceId: string; name?: string; category?: string }> };
-      const voices = (payload.voices ?? []).map((voice) => ({
-        id: voice.voiceId,
+      const voices = (await this.cartesiaService.listVoices({ limit: 100 })).map((voice) => ({
+        id: voice.id,
         name: voice.name ?? "Unnamed voice",
-        category: String(voice.category ?? "unknown")
+        category: "cartesia"
       }));
 
       // Cache the result
@@ -923,26 +912,9 @@ export class AiService {
 
       return voices;
     } catch (error) {
-      const status = this.getStatusCode(error);
-      if (status === 401) {
-        if (this.canUseGeminiTts()) {
-          console.warn("[Voices] ElevenLabs voice lookup failed (401). Returning Gemini voice list instead.");
-          return this.listGeminiVoices();
-        }
-        throw new Error("ElevenLabs voice lookup failed (401 Unauthorized). Your ELEVENLABS_API_KEY is invalid, expired, or not permitted.");
-      }
-      if (status === 402) {
-        if (this.canUseGeminiTts()) {
-          console.warn("[Voices] ElevenLabs voice lookup failed (402). Returning Gemini voice list instead.");
-          return this.listGeminiVoices();
-        }
-        throw new Error("ElevenLabs voice lookup failed (402 Payment Required). Your account has no remaining credits or your plan does not allow this request.");
-      }
-      if (this.canUseGeminiTts()) {
-        console.warn(`[Voices] ElevenLabs voice lookup failed (${status ?? "unknown"}). Returning Gemini voice list instead.`);
-        return this.listGeminiVoices();
-      }
-      throw new Error(`ElevenLabs voice lookup failed with status ${status ?? "unknown"}.`);
+      const mapped = this.mapCartesiaSpeechError(error);
+      this.disableCartesiaTts(mapped.message);
+      throw mapped;
     }
   }
 
@@ -955,7 +927,7 @@ export class AiService {
   }
 
   listGoogleVoices(): Array<{ id: string; name: string; category: string }> {
-    return this.listGeminiVoices();
+    return [];
   }
 
   private getStatusCode(error: unknown): number | undefined {

@@ -8,9 +8,9 @@ It supports:
 - Chat-style replies when users mention `@Nami`
 - Web search summaries using DuckDuckGo search results plus AI summarization
 - Text games like guessing, trivia, scramble, rock-paper-scissors, and coinflip
-- Text-to-speech in voice channels with ElevenLabs primary + Gemini (Google) fallback
+- Text-to-speech in voice channels with Cartesia
 - Storage backed by local JSON or Supabase
-- Per-user preferences for ElevenLabs voice ID, Google voice name, speed, language, and AI reply style
+- Per-user preferences for Cartesia voice ID, speed, language, and AI reply style
 - Per-user model mode switch (smart vs uncensored)
 - Server-level TTS language for both `/tts say` and auto voice read
 - Optional auto voice reading in VC with auto-join include/exclude controls
@@ -25,11 +25,8 @@ It supports:
 - Venice chat completions API for uncensored model chat
 - OpenRouter for text generation
 - DuckDuckGo HTML search for free web search results
-- ElevenLabs for text-to-speech
-- Gemini TTS API as fallback speech provider
-- Python 3 + `elevenlabs-python` SDK for ElevenLabs synthesis execution
+- Cartesia websocket TTS
 - Supabase as an optional runtime storage backend
-- Cartesia scaffolding for in-progress TTS migration
 - `node-cron` for internal keepalive scheduling
 
 ## Setup
@@ -65,41 +62,17 @@ VENICE_API_KEY=your_venice_api_key
 VENICE_MODEL=venice-uncensored
 OPENROUTER_API_KEY=your_openrouter_api_key
 OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
-ELEVENLABS_API_KEY=your_elevenlabs_api_key
-ELEVENLABS_API_KEY_FALLBACK=optional_backup_elevenlabs_key
-ELEVENLABS_DEFAULT_VOICE_ID=
-ELEVENLABS_MODEL_ID=eleven_flash_v2_5
-ELEVENLABS_USE_PYTHON_SDK=true
-PYTHON_EXECUTABLE=python
-GEMINI_API_KEY=optional_google_gemini_api_key_for_tts_fallback
-GEMINI_API_KEY_2=optional_second_google_gemini_api_key
-GEMINI_API_KEY_3=optional_third_google_gemini_api_key
-GEMINI_API_KEY_4=optional_fourth_google_gemini_api_key
-GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
-GEMINI_TTS_VOICE=Kore
-GOOGLE_API_KEY=optional_alias_for_gemini_api_key
-GOOGLE_API_KEY_2=optional_alias_for_second_gemini_key
-GOOGLE_API_KEY_3=optional_alias_for_third_gemini_key
-GOOGLE_API_KEY_4=optional_alias_for_fourth_gemini_key
-GOOGLE_TTS_MODEL=optional_alias_for_gemini_tts_model
-GOOGLE_TTS_VOICE=optional_alias_for_gemini_tts_voice
 INTERNAL_KEEPALIVE_ENABLED=false
 INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14
 INTERNAL_KEEPALIVE_URL=optional_absolute_healthcheck_url
 PORT=8080
 ```
 
-`GOOGLE_API_KEY`, `GOOGLE_TTS_MODEL`, and `GOOGLE_TTS_VOICE` are accepted as aliases for the Gemini settings.
-
 Set `USE_SUPABASE_STORAGE=true` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to use Supabase for guild settings, user preferences, and conversation history. If disabled (or if keys are missing), Nami falls back to local JSON storage.
 
-`CARTESIA_*` variables are scaffolded for the TTS migration currently in progress. The active runtime still uses ElevenLabs + Gemini for speech output.
+`CARTESIA_*` variables are used by the active runtime TTS path.
 
 Internal keepalive cron is production-enabled by default and runs every 14 minutes. Override with `INTERNAL_KEEPALIVE_ENABLED`, `INTERNAL_KEEPALIVE_INTERVAL_MINUTES`, and optional `INTERNAL_KEEPALIVE_URL`.
-
-For Gemini key failover, configure `GEMINI_API_KEY_2/3/4` (or `GOOGLE_API_KEY_2/3/4`). The bot tries keys in order and falls back to the next key when auth/quota/rate-limit errors occur.
-
-`ELEVENLABS_USE_PYTHON_SDK=true` makes the bot execute ElevenLabs TTS through `tts.py` using the official Python SDK. If Python execution fails, the bot falls back to the REST path automatically.
 
 `DISCORD_GUILD_ID` is optional but recommended while testing because guild commands register much faster than global commands.
 
@@ -109,12 +82,6 @@ For Gemini key failover, configure `GEMINI_API_KEY_2/3/4` (or `GOOGLE_API_KEY_2/
 npm install
 npm run build
 npm start
-```
-
-Install Python dependency once:
-
-```bash
-python -m pip install -r requirements.txt
 ```
 
 For local development with auto-reload:
@@ -138,15 +105,11 @@ If your local IP is rate-limited or blocked by provider anti-abuse checks, deplo
    - `VENICE_MODEL` (default `venice-uncensored`)
    - `OPENROUTER_API_KEY`
    - `OPENROUTER_MODEL`
-   - `ELEVENLABS_API_KEY`
-   - `ELEVENLABS_API_KEY_FALLBACK` (optional)
-   - `ELEVENLABS_DEFAULT_VOICE_ID`
-   - `ELEVENLABS_MODEL_ID`
-   - `ELEVENLABS_USE_PYTHON_SDK=true`
-   - `PYTHON_EXECUTABLE` (for example `python3`)
-   - `GEMINI_API_KEY` (optional fallback)
-   - `GEMINI_TTS_MODEL` (optional)
-   - `GEMINI_TTS_VOICE` (optional)
+   - `CARTESIA_API_KEY`
+   - `CARTESIA_VERSION` (default `2026-03-01`)
+   - `CARTESIA_MODEL` (default `sonic-3`)
+   - `CARTESIA_DEFAULT_VOICE_ID` (optional)
+   - `CARTESIA_MAX_BUFFER_DELAY_MS` (optional)
    - `INTERNAL_KEEPALIVE_ENABLED=true` (optional, default true in production)
    - `INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14` (optional)
    - `INTERNAL_KEEPALIVE_URL` (optional absolute URL; defaults to `/healthz` target)
@@ -167,20 +130,20 @@ Both return JSON status including bot readiness and TTS availability.
 - `/search query:<text>`: Search the web and summarize results
 - `/preferences view|voice|search|language|reset`: Manage personal preferences
 - `/preferences model mode:<smart|uncensored>`: Smart mode uses OpenRouter, uncensored mode uses Venice
-- `/preferences voices`: List provider voices and Google/Gemini voices
+- `/preferences voices`: List Cartesia voices
 - `/game guess-start|guess-pick|trivia|scramble|rps|coinflip`: Play text games
 - `/voice join|leave|auto-read|autojoin|language`: Voice controls plus automatic VC speech options
-- `/tts say|stop|voices`: Speak text with available TTS providers (ElevenLabs or Gemini fallback)
+- `/tts say|stop|voices`: Speak text with Cartesia TTS
 - `/admin feature|system-prompt|announce|clear-history|set-announcements|tts-language`: Server-level management
 
 ## Notes
 
 - Nami stores server settings, user preferences, and short chat history in Supabase when enabled, otherwise in `data/storage.json`.
 - Generated TTS files are created temporarily under `data/audio` and cleaned up after playback.
-- `/tts voices` shows provider voice IDs and Google/Gemini voice names.
-- Google/Gemini voice can be set via `/preferences voice google_voice:<name|auto>`. `auto` picks a default voice based on your preferred language.
+- `/tts voices` shows Cartesia voice IDs.
+- Set your preferred voice with `/preferences voice voice_id:<id>`.
 - TTS speech language now defaults to server-level Hindi. Change it with `/voice language value:<language>` or `/admin tts-language value:<language>`.
-- As of April 10, 2026, OpenRouter free models and ElevenLabs plans can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
+- As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
 - Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.
 

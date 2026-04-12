@@ -96,9 +96,8 @@ export function createCommands(): BotCommand[] {
   const preferences: BotCommand = {
     data: new SlashCommandBuilder().setName("preferences").setDescription("Set your Nami preferences.")
       .addSubcommand((subcommand) => subcommand.setName("view").setDescription("Show your current settings."))
-      .addSubcommand((subcommand) => subcommand.setName("voice").setDescription("Set your preferred ElevenLabs voice, Google voice, and playback speed.")
-        .addStringOption((option) => option.setName("voice_id").setDescription("ElevenLabs voice ID from /tts voices").setRequired(false))
-        .addStringOption((option) => option.setName("google_voice").setDescription("Google/Gemini voice name, or auto").setRequired(false))
+      .addSubcommand((subcommand) => subcommand.setName("voice").setDescription("Set your preferred Cartesia voice and playback speed.")
+        .addStringOption((option) => option.setName("voice_id").setDescription("Cartesia voice ID from /tts voices").setRequired(false))
         .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.7 to 1.2").setRequired(false)))
       .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("Show voices and how to set one quickly."))
       .addSubcommand((subcommand) => subcommand.setName("model").setDescription("Choose your AI model behavior.")
@@ -115,7 +114,6 @@ export function createCommands(): BotCommand[] {
         await respond(interaction, [
           "Your preferences:",
           `Voice ID: **${current.voice || "auto"}**`,
-          `Google voice: **${current.geminiVoice || "auto"}**`,
           `TTS speed: **${current.ttsSpeed}x**`,
           `Model mode: **${current.modelMode}**`,
           `Default web search: **${current.searchEnabledByDefault ? "on" : "off"}**`,
@@ -124,26 +122,18 @@ export function createCommands(): BotCommand[] {
         return;
       }
       if (subcommand === "voices") {
-        if (!context.ai) throw new Error("No TTS provider is configured yet (set ELEVENLABS_API_KEY and/or GEMINI_API_KEY).");
+        if (!context.ai) throw new Error("No TTS provider is configured yet (set CARTESIA_API_KEY).");
         await respond(interaction, "Loading available voices...", { defer: true });
         const voices = await context.ai.listVoices();
-        const googleVoices = context.ai.listGoogleVoices();
-        const providerList = voices.slice(0, 20);
-        const googleList = googleVoices.slice(0, 20);
+        const providerList = voices.slice(0, 25);
         const providerText = providerList.length
           ? providerList.map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
-          : "No provider voices were returned.";
-        const googleText = googleList.length
-          ? googleList.map((voiceInfo) => `- **${voiceInfo.name}**: \`${voiceInfo.id}\``).join("\n")
-          : "No Google voices available.";
+          : "No Cartesia voices were returned.";
         await respond(interaction, [
-          "Provider voices:",
+          "Cartesia voices:",
           providerText,
           "",
-          "Google/Gemini voices:",
-          googleText,
-          "",
-          "Set defaults with: `/preferences voice voice_id:<id> google_voice:<name|auto>`"
+          "Set defaults with: `/preferences voice voice_id:<id>`"
         ].join("\n"), { ephemeral: true });
         return;
       }
@@ -155,10 +145,8 @@ export function createCommands(): BotCommand[] {
       await context.storage.updateUserPreferences(interaction.user.id, (current) => {
         if (subcommand === "voice") {
           const voiceId = interaction.options.getString("voice_id");
-          const googleVoice = interaction.options.getString("google_voice");
           const speed = interaction.options.getNumber("speed");
           if (voiceId !== null) current.voice = voiceId.trim();
-          if (googleVoice !== null) current.geminiVoice = googleVoice.trim() || "auto";
           if (speed !== null) current.ttsSpeed = clamp(speed, 0.7, 1.2);
         }
         if (subcommand === "model") current.modelMode = interaction.options.getString("mode", true) as AiModelMode;
@@ -169,7 +157,7 @@ export function createCommands(): BotCommand[] {
       const persisted = await context.storage.getUserPreferences(interaction.user.id);
       await respond(
         interaction,
-        `Saved. Voice ID: **${persisted.voice || "auto"}**, Google voice: **${persisted.geminiVoice || "auto"}**, model: **${persisted.modelMode}**, language: **${persisted.language}**.`,
+        `Saved. Voice ID: **${persisted.voice || "auto"}**, model: **${persisted.modelMode}**, language: **${persisted.language}**.`,
         { ephemeral: true }
       );
     }
@@ -362,30 +350,25 @@ export function createCommands(): BotCommand[] {
   };
 
   const tts: BotCommand = {
-    data: new SlashCommandBuilder().setName("tts").setDescription("Speak text in voice chat using available TTS providers.")
+    data: new SlashCommandBuilder().setName("tts").setDescription("Speak text in voice chat using Cartesia.")
       .addSubcommand((subcommand) => subcommand.setName("say").setDescription("Speak a message in your voice channel.")
         .addStringOption((option) => option.setName("text").setDescription("What should Nami say?").setRequired(true))
-        .addStringOption((option) => option.setName("voice_id").setDescription("Optional ElevenLabs voice ID").setRequired(false))
-        .addStringOption((option) => option.setName("google_voice").setDescription("Optional Google/Gemini voice name or auto").setRequired(false))
+        .addStringOption((option) => option.setName("voice_id").setDescription("Optional Cartesia voice ID").setRequired(false))
         .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.7 to 1.2").setRequired(false)))
       .addSubcommand((subcommand) => subcommand.setName("stop").setDescription("Stop speaking and clear the queue."))
-      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List available TTS voices (provider + Google).")),
+      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List available Cartesia voices.")),
     async execute(interaction, context) {
       await requireFeature(interaction, context.storage, "tts");
-      if (!context.ai) throw new Error("No TTS provider is configured yet (set ELEVENLABS_API_KEY and/or GEMINI_API_KEY).");
+      if (!context.ai) throw new Error("No TTS provider is configured yet (set CARTESIA_API_KEY).");
       if (!context.voicePlayer) throw new Error("Voice playback service is unavailable right now.");
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "voices") {
         await respond(interaction, "Loading available voices...", { defer: true });
         const voices = await context.ai.listVoices();
-        const googleVoices = context.ai.listGoogleVoices();
         const providerText = voices.length
-          ? voices.slice(0, 15).map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
-          : "No provider voices were returned.";
-        const googleText = googleVoices.length
-          ? googleVoices.slice(0, 15).map((voiceInfo) => `- **${voiceInfo.name}**: \`${voiceInfo.id}\``).join("\n")
-          : "No Google voices available.";
-        await respond(interaction, `Provider voices:\n${providerText}\n\nGoogle/Gemini voices:\n${googleText}`, { ephemeral: true });
+          ? voices.slice(0, 25).map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
+          : "No Cartesia voices were returned.";
+        await respond(interaction, `Cartesia voices:\n${providerText}`, { ephemeral: true });
         return;
       }
       const guildId = requireGuildId(interaction);
@@ -398,13 +381,12 @@ export function createCommands(): BotCommand[] {
       const member = await fetchGuildMember(interaction);
       const preferences = await context.storage.getUserPreferences(interaction.user.id);
       const text = interaction.options.getString("text", true);
-      const elevenLabsVoice = interaction.options.getString("voice_id") ?? preferences.voice;
-      const googleVoice = interaction.options.getString("google_voice") ?? preferences.geminiVoice;
+      const voiceId = interaction.options.getString("voice_id") ?? preferences.voice;
       const speed = clamp(interaction.options.getNumber("speed") ?? preferences.ttsSpeed, 0.7, 1.2);
 
       if (subcommand === "say" && !context.ai.isTtsAvailable()) {
         await respond(interaction, "TTS is currently unavailable. Re-checking service status...", { defer: true });
-        const recoveryStatus = await context.ai.tryRecoverElevenLabsTts(true);
+        const recoveryStatus = await context.ai.tryRecoverTts(true);
         if (!context.ai.isTtsAvailable()) {
           const reason = context.ai.getTtsUnavailableReason();
           throw new Error(`TTS is still unavailable. ${recoveryStatus}${reason ? ` ${reason}` : ""}`);
@@ -416,15 +398,14 @@ export function createCommands(): BotCommand[] {
 
       const filePath = await context.ai.synthesizeSpeech({
         text,
-        elevenLabsVoice,
-        geminiVoice: googleVoice,
+        voiceId,
         language: guildSettings.ttsLanguage,
         speed,
         userId: interaction.user.id
       });
       const queueDepth = await context.voicePlayer.enqueue(member, filePath, speed);
       const queueMessage = queueDepth > 1 ? `Queued. There are **${queueDepth - 1}** item(s) ahead of this one.` : "Playing now.";
-      await respond(interaction, `${queueMessage}\nElevenLabs voice: **${elevenLabsVoice || "default"}**\nGoogle voice: **${googleVoice || "auto"}**\nLanguage: **${guildSettings.ttsLanguage}**\nSpeed: **${speed}x**.`);
+      await respond(interaction, `${queueMessage}\nCartesia voice: **${voiceId || "default"}**\nLanguage: **${guildSettings.ttsLanguage}**\nSpeed: **${speed}x**.`);
     }
   };
 
@@ -508,7 +489,7 @@ export function createCommands(): BotCommand[] {
         "`/voice language value:<language>` - set server TTS/auto-read language (Manage Server required)",
         "`/memory view`, `/memory clear` - see or clear remembered conversation",
         "`/voice auto-read`, `/voice autojoin` - automatic VC speech behavior",
-        "`/tts voices` - list provider voices plus Google/Gemini voice names",
+        "`/tts voices` - list available Cartesia voices",
         "`/game guess-start`, `/game guess-pick`, `/game trivia`, `/game scramble`, `/game rps`, `/game coinflip`",
         "`/voice join`, `/voice leave`, `/tts say`, `/tts stop` - voice chat controls",
         "`/admin ...` - feature flags, prompts, announcements, TTS language, and history cleanup"
