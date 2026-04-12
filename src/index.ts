@@ -1,15 +1,61 @@
 import { Client, Events, GatewayIntentBits, REST, Routes } from "discord.js";
+import { mkdirSync } from "node:fs";
 import { createServer } from "node:http";
+import cron from "node-cron";
 import { createCommands, type BotCommand, type CommandContext } from "./bot-commands.js";
-import { loadConfig } from "./config.js";
+import { AUDIO_DIR, DATA_DIR, loadConfig } from "./config.js";
 import { AiService } from "./services/ai-service.js";
 import { GameService } from "./services/game-service.js";
+import { SupabaseStorage } from "./services/supabase-storage.js";
 import { VoiceService } from "./services/voice-service.js";
-import { AppStorage } from "./storage.js";
+import { AppStorage, type StorageProvider } from "./storage.js";
 import { formatCitationBlock, respond, splitMessage } from "./utils.js";
 
 const config = loadConfig();
-const storage = new AppStorage();
+
+function ensureRuntimeDirectories(): void {
+  mkdirSync(DATA_DIR, { recursive: true });
+  mkdirSync(AUDIO_DIR, { recursive: true });
+}
+
+function createStorageBackend(): StorageProvider {
+  if (!config.useSupabaseStorage) {
+    console.log("[Storage] Using local JSON storage.");
+    return new AppStorage();
+  }
+
+  if (!SupabaseStorage.isConfigured(config)) {
+    console.warn(
+      "[Storage] USE_SUPABASE_STORAGE is enabled, but SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY are missing. Falling back to local JSON storage."
+    );
+    return new AppStorage();
+  }
+
+  console.log("[Storage] Using Supabase storage.");
+  return new SupabaseStorage(config);
+}
+
+function readEnvFlag(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) {
+    return fallback;
+  }
+
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function readEnvInt(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+ensureRuntimeDirectories();
+const storage = createStorageBackend();
 const games = new GameService();
 const ai =
   config.openRouterApiKey ||
@@ -31,6 +77,7 @@ const context: CommandContext = {
 const commands = createCommands();
 const commandMap = new Map<string, BotCommand>(commands.map((command: BotCommand) => [command.data.name, command]));
 const lastAutoVoiceSpeakerByGuild = new Map<string, string>();
+let keepaliveCronStarted = false;
 
 function clearGuildAutoVoiceState(guildId: string): void {
   lastAutoVoiceSpeakerByGuild.delete(guildId);
@@ -106,6 +153,54 @@ function startHealthServer(): void {
   });
 }
 
+function startInternalKeepaliveCron(): void {
+  if (keepaliveCronStarted) {
+    return;
+  }
+
+  const enabledByDefault = (process.env.NODE_ENV ?? "").trim().toLowerCase() === "production";
+  const enabled = readEnvFlag("INTERNAL_KEEPALIVE_ENABLED", enabledByDefault);
+  if (!enabled) {
+    return;
+  }
+
+  const intervalMinutes = Math.max(1, Math.min(59, readEnvInt("INTERNAL_KEEPALIVE_INTERVAL_MINUTES", 14)));
+
+  const explicitTarget = process.env.INTERNAL_KEEPALIVE_URL?.trim();
+  const renderExternalUrl = process.env.RENDER_EXTERNAL_URL?.trim();
+  const localPort = process.env.PORT?.trim();
+  const targetUrl =
+    explicitTarget ||
+    (renderExternalUrl ? `${renderExternalUrl.replace(/\/$/, "")}/healthz` : undefined) ||
+    (localPort ? `http://127.0.0.1:${localPort}/healthz` : undefined);
+
+  if (!targetUrl) {
+    console.warn("[Keepalive] Internal keepalive cron is enabled but no target URL could be resolved.");
+    return;
+  }
+
+  const cronExpression = `*/${intervalMinutes} * * * *`;
+  cron.schedule(cronExpression, () => {
+    void (async () => {
+      try {
+        const response = await fetch(targetUrl, {
+          method: "GET",
+          headers: {
+            "Cache-Control": "no-store"
+          }
+        });
+
+        console.log(`[Keepalive] Pinged ${targetUrl} -> ${response.status}`);
+      } catch (error) {
+        console.error("[Keepalive] Internal keepalive ping failed", error);
+      }
+    })();
+  });
+
+  keepaliveCronStarted = true;
+  console.log(`[Keepalive] Internal cron enabled (${cronExpression}) targeting ${targetUrl}.`);
+}
+
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) {
     return;
@@ -139,7 +234,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  const settings = storage.getGuildSettings(message.guildId);
+  const settings = await storage.getGuildSettings(message.guildId);
 
   if (context.ai && context.ai.isTtsAvailable() && context.voicePlayer && settings.features.tts && settings.autoVoiceReadEnabled) {
     try {
@@ -166,7 +261,7 @@ client.on(Events.MessageCreate, async (message) => {
           const spokenContent = cleaned || (message.attachments.size > 0 ? "sent an attachment" : "");
 
           if (spokenContent) {
-            const preferences = storage.getUserPreferences(message.author.id);
+            const preferences = await storage.getUserPreferences(message.author.id);
             const previousSpeaker = lastAutoVoiceSpeakerByGuild.get(message.guildId);
             const speakerName = member.displayName || message.author.username;
             const speechText = previousSpeaker === message.author.id
@@ -189,7 +284,7 @@ client.on(Events.MessageCreate, async (message) => {
     } catch (error) {
       console.error("Auto VC speech failure", error);
       if (!context.ai.isTtsAvailable()) {
-        storage.updateGuildSettings(message.guildId, (current) => {
+        await storage.updateGuildSettings(message.guildId, (current) => {
           current.autoVoiceReadEnabled = false;
           return current;
         });
@@ -228,8 +323,8 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
     await message.channel.sendTyping();
-    const preferences = storage.getUserPreferences(message.author.id);
-    const history = storage.getConversation(message.guildId, message.author.id);
+    const preferences = await storage.getUserPreferences(message.author.id);
+    const history = await storage.getConversation(message.guildId, message.author.id);
     const result = await context.ai.answerQuestion({
       prompt: cleanedPrompt,
       history,
@@ -239,12 +334,12 @@ client.on(Events.MessageCreate, async (message) => {
       userId: message.author.id
     });
 
-    storage.appendConversation(message.guildId, message.author.id, {
+    await storage.appendConversation(message.guildId, message.author.id, {
       role: "user",
       content: cleanedPrompt,
       createdAt: new Date().toISOString()
     });
-    storage.appendConversation(message.guildId, message.author.id, {
+    await storage.appendConversation(message.guildId, message.author.id, {
       role: "assistant",
       content: result.text,
       createdAt: new Date().toISOString()
@@ -319,6 +414,7 @@ async function runStartupChecks(): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   startHealthServer();
+  startInternalKeepaliveCron();
   await runStartupChecks();
   await registerCommands();
   await client.login(config.discordToken);

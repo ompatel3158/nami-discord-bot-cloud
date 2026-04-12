@@ -4,6 +4,7 @@ import {
   DEFAULT_USER_PREFERENCES,
   type AppConfig
 } from "../config.js";
+import type { StorageProvider } from "../storage.js";
 import type {
   ConversationMessage,
   GuildSettings,
@@ -35,7 +36,7 @@ function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-export class SupabaseStorage {
+export class SupabaseStorage implements StorageProvider {
   private readonly client: SupabaseClient;
 
   static isConfigured(config: AppConfig): boolean {

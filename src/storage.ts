@@ -8,6 +8,31 @@ import {
 } from "./config.js";
 import type { ConversationMessage, GuildSettings, UserPreferences } from "./types.js";
 
+export interface StorageProvider {
+  getGuildSettings(guildId: string): GuildSettings | Promise<GuildSettings>;
+  saveGuildSettings(guildId: string, settings: GuildSettings): GuildSettings | Promise<GuildSettings>;
+  updateGuildSettings(
+    guildId: string,
+    updater: (current: GuildSettings) => GuildSettings
+  ): GuildSettings | Promise<GuildSettings>;
+
+  getUserPreferences(userId: string): UserPreferences | Promise<UserPreferences>;
+  saveUserPreferences(userId: string, preferences: UserPreferences): UserPreferences | Promise<UserPreferences>;
+  updateUserPreferences(
+    userId: string,
+    updater: (current: UserPreferences) => UserPreferences
+  ): UserPreferences | Promise<UserPreferences>;
+
+  getConversation(guildId: string, userId: string): ConversationMessage[] | Promise<ConversationMessage[]>;
+  appendConversation(
+    guildId: string,
+    userId: string,
+    message: ConversationMessage,
+    limit?: number
+  ): ConversationMessage[] | Promise<ConversationMessage[]>;
+  clearConversation(guildId: string, userId?: string): number | Promise<number>;
+}
+
 interface StorageShape {
   guilds: Record<string, GuildSettings>;
   users: Record<string, UserPreferences>;

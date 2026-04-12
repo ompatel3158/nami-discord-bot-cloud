@@ -14,6 +14,10 @@ services:
         value: sonic-3
       - key: USE_SUPABASE_STORAGE
         value: "false"
+      - key: INTERNAL_KEEPALIVE_ENABLED
+        value: "true"
+      - key: INTERNAL_KEEPALIVE_INTERVAL_MINUTES
+        value: "14"
       - key: OPENROUTER_MODEL
         value: nvidia/nemotron-3-super-120b-a12b:free
       - key: VENICE_MODEL

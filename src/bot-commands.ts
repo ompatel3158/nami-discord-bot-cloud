@@ -3,13 +3,13 @@ import { DEFAULT_USER_PREFERENCES, type AppConfig } from "./config.js";
 import { AiService } from "./services/ai-service.js";
 import { GameService } from "./services/game-service.js";
 import { VoiceService } from "./services/voice-service.js";
-import { AppStorage } from "./storage.js";
+import type { StorageProvider } from "./storage.js";
 import type { AiModelMode, FeatureFlag } from "./types.js";
 import { clamp, formatCitationBlock, respond, requireGuildId } from "./utils.js";
 
 export interface CommandContext {
   config: AppConfig;
-  storage: AppStorage;
+  storage: StorageProvider;
   games: GameService;
   ai: AiService | null;
   voicePlayer: VoiceService | null;
@@ -32,9 +32,13 @@ const modelChoices: Array<{ name: string; value: AiModelMode }> = [
   { name: "Uncensored (Venice)", value: "uncensored" }
 ];
 
-function requireFeature(interaction: ChatInputCommandInteraction, storage: AppStorage, feature: FeatureFlag): void {
+async function requireFeature(
+  interaction: ChatInputCommandInteraction,
+  storage: StorageProvider,
+  feature: FeatureFlag
+): Promise<void> {
   const guildId = requireGuildId(interaction);
-  const settings = storage.getGuildSettings(guildId);
+  const settings = await storage.getGuildSettings(guildId);
   if (!settings.features[feature]) throw new Error(`The ${feature.toUpperCase()} feature is disabled in this server.`);
 }
 
@@ -50,19 +54,27 @@ export function createCommands(): BotCommand[] {
       .addStringOption((option) => option.setName("prompt").setDescription("What do you want to ask?").setRequired(true))
       .addBooleanOption((option) => option.setName("web").setDescription("Let Nami search the web before answering.").setRequired(false)),
     async execute(interaction, context) {
-      requireFeature(interaction, context.storage, "ai");
+      await requireFeature(interaction, context.storage, "ai");
       if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode).");
       const guildId = requireGuildId(interaction);
-      const settings = context.storage.getGuildSettings(guildId);
-      const preferences = context.storage.getUserPreferences(interaction.user.id);
+      const settings = await context.storage.getGuildSettings(guildId);
+      const preferences = await context.storage.getUserPreferences(interaction.user.id);
       const prompt = interaction.options.getString("prompt", true);
       const searchWeb = interaction.options.getBoolean("web") ?? preferences.searchEnabledByDefault;
-      if (searchWeb) requireFeature(interaction, context.storage, "search");
+      if (searchWeb) await requireFeature(interaction, context.storage, "search");
       await respond(interaction, "Thinking...", { defer: true });
-      const history = context.storage.getConversation(guildId, interaction.user.id);
+      const history = await context.storage.getConversation(guildId, interaction.user.id);
       const result = await context.ai.answerQuestion({ prompt, history, searchWeb, systemPrompt: settings.systemPrompt, preferences, userId: interaction.user.id });
-      context.storage.appendConversation(guildId, interaction.user.id, { role: "user", content: prompt, createdAt: new Date().toISOString() });
-      context.storage.appendConversation(guildId, interaction.user.id, { role: "assistant", content: result.text, createdAt: new Date().toISOString() });
+      await context.storage.appendConversation(guildId, interaction.user.id, {
+        role: "user",
+        content: prompt,
+        createdAt: new Date().toISOString()
+      });
+      await context.storage.appendConversation(guildId, interaction.user.id, {
+        role: "assistant",
+        content: result.text,
+        createdAt: new Date().toISOString()
+      });
       await respond(interaction, `${result.text}${formatCitationBlock(result.citations)}`);
     }
   };
@@ -71,10 +83,10 @@ export function createCommands(): BotCommand[] {
     data: new SlashCommandBuilder().setName("search").setDescription("Search the web and summarize the results.")
       .addStringOption((option) => option.setName("query").setDescription("What should Nami search for?").setRequired(true)),
     async execute(interaction, context) {
-      requireFeature(interaction, context.storage, "search");
+      await requireFeature(interaction, context.storage, "search");
       if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode).");
       const query = interaction.options.getString("query", true);
-      const preferences = context.storage.getUserPreferences(interaction.user.id);
+      const preferences = await context.storage.getUserPreferences(interaction.user.id);
       await respond(interaction, "Searching the web...", { defer: true });
       const result = await context.ai.searchWeb(query, preferences, interaction.user.id);
       await respond(interaction, `${result.text}${formatCitationBlock(result.citations)}`);
@@ -99,7 +111,7 @@ export function createCommands(): BotCommand[] {
     async execute(interaction, context) {
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "view") {
-        const current = context.storage.getUserPreferences(interaction.user.id);
+        const current = await context.storage.getUserPreferences(interaction.user.id);
         await respond(interaction, [
           "Your preferences:",
           `Voice ID: **${current.voice || "auto"}**`,
@@ -136,11 +148,11 @@ export function createCommands(): BotCommand[] {
         return;
       }
       if (subcommand === "reset") {
-        context.storage.saveUserPreferences(interaction.user.id, DEFAULT_USER_PREFERENCES);
+        await context.storage.saveUserPreferences(interaction.user.id, DEFAULT_USER_PREFERENCES);
         await respond(interaction, "Your preferences have been reset to the defaults.", { ephemeral: true });
         return;
       }
-      context.storage.updateUserPreferences(interaction.user.id, (current) => {
+      await context.storage.updateUserPreferences(interaction.user.id, (current) => {
         if (subcommand === "voice") {
           const voiceId = interaction.options.getString("voice_id");
           const googleVoice = interaction.options.getString("google_voice");
@@ -154,7 +166,7 @@ export function createCommands(): BotCommand[] {
         if (subcommand === "language") current.language = interaction.options.getString("value", true);
         return current;
       });
-      const persisted = context.storage.getUserPreferences(interaction.user.id);
+      const persisted = await context.storage.getUserPreferences(interaction.user.id);
       await respond(
         interaction,
         `Saved. Voice ID: **${persisted.voice || "auto"}**, Google voice: **${persisted.geminiVoice || "auto"}**, model: **${persisted.modelMode}**, language: **${persisted.language}**.`,
@@ -173,13 +185,13 @@ export function createCommands(): BotCommand[] {
       const subcommand = interaction.options.getSubcommand();
 
       if (subcommand === "clear") {
-        const cleared = context.storage.clearConversation(guildId, interaction.user.id);
+        const cleared = await context.storage.clearConversation(guildId, interaction.user.id);
         await respond(interaction, `Cleared **${cleared}** conversation thread(s) for you in this server.`, { ephemeral: true });
         return;
       }
 
       const count = interaction.options.getInteger("count") ?? 12;
-      const history = context.storage.getConversation(guildId, interaction.user.id).slice(-count);
+      const history = (await context.storage.getConversation(guildId, interaction.user.id)).slice(-count);
       if (history.length === 0) {
         await respond(interaction, "No saved conversation memory found yet for you in this server.", { ephemeral: true });
         return;
@@ -210,7 +222,7 @@ export function createCommands(): BotCommand[] {
           { name: "Rock", value: "rock" }, { name: "Paper", value: "paper" }, { name: "Scissors", value: "scissors" })))
       .addSubcommand((subcommand) => subcommand.setName("coinflip").setDescription("Flip a coin.")),
     async execute(interaction, context) {
-      requireFeature(interaction, context.storage, "games");
+      await requireFeature(interaction, context.storage, "games");
       const guildId = requireGuildId(interaction);
       const key = `${guildId}:${interaction.user.id}`;
       const subcommand = interaction.options.getSubcommand();
@@ -261,7 +273,7 @@ export function createCommands(): BotCommand[] {
         ))
         .addChannelOption((option) => option.setName("channel").setDescription("Voice channel for include/exclude actions").addChannelTypes(ChannelType.GuildVoice).setRequired(false))),
     async execute(interaction, context) {
-      requireFeature(interaction, context.storage, "tts");
+      await requireFeature(interaction, context.storage, "tts");
       if (!context.voicePlayer) throw new Error("Voice playback service is unavailable right now.");
       const guildId = requireGuildId(interaction);
       const subcommand = interaction.options.getSubcommand();
@@ -272,7 +284,7 @@ export function createCommands(): BotCommand[] {
       }
       if (subcommand === "auto-read") {
         const enabled = interaction.options.getBoolean("enabled", true);
-        const settings = context.storage.updateGuildSettings(guildId, (current) => {
+        const settings = await context.storage.updateGuildSettings(guildId, (current) => {
           current.autoVoiceReadEnabled = enabled;
           return current;
         });
@@ -284,7 +296,7 @@ export function createCommands(): BotCommand[] {
           throw new Error("You need Manage Server permission to change the server TTS language.");
         }
         const value = interaction.options.getString("value", true).trim();
-        const settings = context.storage.updateGuildSettings(guildId, (current) => {
+        const settings = await context.storage.updateGuildSettings(guildId, (current) => {
           current.ttsLanguage = value;
           return current;
         });
@@ -299,7 +311,7 @@ export function createCommands(): BotCommand[] {
         const action = interaction.options.getString("action", true);
         const selected = interaction.options.getChannel("channel");
         const channelId = selected?.id;
-        const settings = context.storage.updateGuildSettings(guildId, (current) => {
+        const settings = await context.storage.updateGuildSettings(guildId, (current) => {
           if (action === "enable") {
             current.autoVoiceJoinEnabled = true;
             // Auto-join without auto-read is confusing in practice, so enable both together.
@@ -359,7 +371,7 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) => subcommand.setName("stop").setDescription("Stop speaking and clear the queue."))
       .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List available TTS voices (provider + Google).")),
     async execute(interaction, context) {
-      requireFeature(interaction, context.storage, "tts");
+      await requireFeature(interaction, context.storage, "tts");
       if (!context.ai) throw new Error("No TTS provider is configured yet (set ELEVENLABS_API_KEY and/or GEMINI_API_KEY).");
       if (!context.voicePlayer) throw new Error("Voice playback service is unavailable right now.");
       const subcommand = interaction.options.getSubcommand();
@@ -377,14 +389,14 @@ export function createCommands(): BotCommand[] {
         return;
       }
       const guildId = requireGuildId(interaction);
-      const guildSettings = context.storage.getGuildSettings(guildId);
+      const guildSettings = await context.storage.getGuildSettings(guildId);
       if (subcommand === "stop") {
         await context.voicePlayer.stop(guildId);
         await respond(interaction, "Stopped speaking and cleared the queue.");
         return;
       }
       const member = await fetchGuildMember(interaction);
-      const preferences = context.storage.getUserPreferences(interaction.user.id);
+      const preferences = await context.storage.getUserPreferences(interaction.user.id);
       const text = interaction.options.getString("text", true);
       const elevenLabsVoice = interaction.options.getString("voice_id") ?? preferences.voice;
       const googleVoice = interaction.options.getString("google_voice") ?? preferences.geminiVoice;
@@ -438,23 +450,32 @@ export function createCommands(): BotCommand[] {
       if (subcommand === "feature") {
         const name = interaction.options.getString("name", true) as FeatureFlag;
         const enabled = interaction.options.getBoolean("enabled", true);
-        context.storage.updateGuildSettings(guildId, (current) => { current.features[name] = enabled; return current; });
+        await context.storage.updateGuildSettings(guildId, (current) => {
+          current.features[name] = enabled;
+          return current;
+        });
         await respond(interaction, `Feature **${name}** is now **${enabled ? "enabled" : "disabled"}**.`); return;
       }
       if (subcommand === "system-prompt") {
         const prompt = interaction.options.getString("prompt", true);
-        context.storage.updateGuildSettings(guildId, (current) => { current.systemPrompt = prompt; return current; });
+        await context.storage.updateGuildSettings(guildId, (current) => {
+          current.systemPrompt = prompt;
+          return current;
+        });
         await respond(interaction, "Updated the server-wide AI system prompt."); return;
       }
 
       if (subcommand === "set-announcements") {
         const channel = interaction.options.getChannel("channel", true);
-        context.storage.updateGuildSettings(guildId, (current) => { current.announcementChannelId = channel.id; return current; });
+        await context.storage.updateGuildSettings(guildId, (current) => {
+          current.announcementChannelId = channel.id;
+          return current;
+        });
         await respond(interaction, `Default announcements will go to <#${channel.id}>.`); return;
       }
       if (subcommand === "tts-language") {
         const value = interaction.options.getString("value", true).trim();
-        context.storage.updateGuildSettings(guildId, (current) => {
+        await context.storage.updateGuildSettings(guildId, (current) => {
           current.ttsLanguage = value;
           return current;
         });
@@ -462,14 +483,14 @@ export function createCommands(): BotCommand[] {
         return;
       }
       if (subcommand === "announce") {
-        const configured = context.storage.getGuildSettings(guildId).announcementChannelId;
+        const configured = (await context.storage.getGuildSettings(guildId)).announcementChannelId;
         const selectedChannel = interaction.options.getChannel("channel") ?? (configured ? await interaction.guild?.channels.fetch(configured) : null) ?? interaction.channel;
         if (!selectedChannel || !("send" in selectedChannel)) throw new Error("Pick a text channel for announcements.");
         await selectedChannel.send({ content: interaction.options.getString("message", true), allowedMentions: { parse: [] } });
         await respond(interaction, `Announcement sent to <#${selectedChannel.id}>.`); return;
       }
       const targetUser = interaction.options.getUser("user");
-      const cleared = context.storage.clearConversation(guildId, targetUser?.id);
+      const cleared = await context.storage.clearConversation(guildId, targetUser?.id);
       await respond(interaction, targetUser ? `Cleared ${cleared} saved conversation thread(s) for ${targetUser}.` : `Cleared **${cleared}** saved conversation thread(s) in this server.`);
     }
   };

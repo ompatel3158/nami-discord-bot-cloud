@@ -9,6 +9,7 @@ It supports:
 - Web search summaries using DuckDuckGo search results plus AI summarization
 - Text games like guessing, trivia, scramble, rock-paper-scissors, and coinflip
 - Text-to-speech in voice channels with ElevenLabs primary + Gemini (Google) fallback
+- Storage backed by local JSON or Supabase
 - Per-user preferences for ElevenLabs voice ID, Google voice name, speed, language, and AI reply style
 - Per-user model mode switch (smart vs uncensored)
 - Server-level TTS language for both `/tts say` and auto voice read
@@ -27,7 +28,9 @@ It supports:
 - ElevenLabs for text-to-speech
 - Gemini TTS API as fallback speech provider
 - Python 3 + `elevenlabs-python` SDK for ElevenLabs synthesis execution
-- Cartesia + Supabase scaffolding for in-progress migration work
+- Supabase as an optional runtime storage backend
+- Cartesia scaffolding for in-progress TTS migration
+- `node-cron` for internal keepalive scheduling
 
 ## Setup
 
@@ -80,12 +83,19 @@ GOOGLE_API_KEY_3=optional_alias_for_third_gemini_key
 GOOGLE_API_KEY_4=optional_alias_for_fourth_gemini_key
 GOOGLE_TTS_MODEL=optional_alias_for_gemini_tts_model
 GOOGLE_TTS_VOICE=optional_alias_for_gemini_tts_voice
+INTERNAL_KEEPALIVE_ENABLED=false
+INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14
+INTERNAL_KEEPALIVE_URL=optional_absolute_healthcheck_url
 PORT=8080
 ```
 
 `GOOGLE_API_KEY`, `GOOGLE_TTS_MODEL`, and `GOOGLE_TTS_VOICE` are accepted as aliases for the Gemini settings.
 
-`CARTESIA_*` and `SUPABASE_*` variables are scaffolded for the migration currently in progress. The active runtime still uses ElevenLabs + Gemini for TTS and local JSON storage until the migration wiring is completed.
+Set `USE_SUPABASE_STORAGE=true` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to use Supabase for guild settings, user preferences, and conversation history. If disabled (or if keys are missing), Nami falls back to local JSON storage.
+
+`CARTESIA_*` variables are scaffolded for the TTS migration currently in progress. The active runtime still uses ElevenLabs + Gemini for speech output.
+
+Internal keepalive cron is production-enabled by default and runs every 14 minutes. Override with `INTERNAL_KEEPALIVE_ENABLED`, `INTERNAL_KEEPALIVE_INTERVAL_MINUTES`, and optional `INTERNAL_KEEPALIVE_URL`.
 
 For Gemini key failover, configure `GEMINI_API_KEY_2/3/4` (or `GOOGLE_API_KEY_2/3/4`). The bot tries keys in order and falls back to the next key when auth/quota/rate-limit errors occur.
 
@@ -137,6 +147,9 @@ If your local IP is rate-limited or blocked by provider anti-abuse checks, deplo
    - `GEMINI_API_KEY` (optional fallback)
    - `GEMINI_TTS_MODEL` (optional)
    - `GEMINI_TTS_VOICE` (optional)
+   - `INTERNAL_KEEPALIVE_ENABLED=true` (optional, default true in production)
+   - `INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14` (optional)
+   - `INTERNAL_KEEPALIVE_URL` (optional absolute URL; defaults to `/healthz` target)
    - `PORT=8080`
 5. Deploy and check logs for startup messages.
 
@@ -162,7 +175,7 @@ Both return JSON status including bot readiness and TTS availability.
 
 ## Notes
 
-- Nami stores server settings, user preferences, and short chat history in `data/storage.json`.
+- Nami stores server settings, user preferences, and short chat history in Supabase when enabled, otherwise in `data/storage.json`.
 - Generated TTS files are created temporarily under `data/audio` and cleaned up after playback.
 - `/tts voices` shows provider voice IDs and Google/Gemini voice names.
 - Google/Gemini voice can be set via `/preferences voice google_voice:<name|auto>`. `auto` picks a default voice based on your preferred language.
