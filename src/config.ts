@@ -53,8 +53,26 @@ export interface AppConfig {
   elevenLabsUsePythonSdk: boolean;
   pythonExecutable: string;
   geminiApiKey?: string;
+  geminiApiKeys: string[];
   geminiTtsModel: string;
   geminiTtsVoice: string;
+}
+
+function collectUniqueNonEmpty(values: Array<string | undefined>): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    deduped.push(normalized);
+  }
+
+  return deduped;
 }
 
 function envFlag(name: string, defaultValue: boolean): boolean {
@@ -76,6 +94,17 @@ function requiredEnv(name: string): string {
 }
 
 export function loadConfig(): AppConfig {
+  const geminiApiKeys = collectUniqueNonEmpty([
+    process.env.GEMINI_API_KEY,
+    process.env.GOOGLE_API_KEY,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GOOGLE_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+    process.env.GOOGLE_API_KEY_3,
+    process.env.GEMINI_API_KEY_4,
+    process.env.GOOGLE_API_KEY_4
+  ]);
+
   return {
     discordToken: requiredEnv("DISCORD_TOKEN"),
     discordClientId: requiredEnv("DISCORD_CLIENT_ID"),
@@ -95,8 +124,8 @@ export function loadConfig(): AppConfig {
     elevenLabsUsePythonSdk: envFlag("ELEVENLABS_USE_PYTHON_SDK", true),
     pythonExecutable:
       process.env.PYTHON_EXECUTABLE?.trim() || (process.platform === "win32" ? "python" : "python3"),
-    geminiApiKey:
-      process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || undefined,
+    geminiApiKey: geminiApiKeys[0],
+    geminiApiKeys,
     geminiTtsModel:
       process.env.GEMINI_TTS_MODEL?.trim() || process.env.GOOGLE_TTS_MODEL?.trim() || "gemini-2.5-flash-preview-tts",
     geminiTtsVoice:

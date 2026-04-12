@@ -167,8 +167,9 @@ export class AiService {
       ? undefined
       : "ELEVENLABS_API_KEY is not configured.";
 
-    this.geminiTtsAvailable = Boolean(config.geminiApiKey);
-    this.geminiDisableReason = config.geminiApiKey
+    const geminiApiKeys = this.getGeminiApiKeys();
+    this.geminiTtsAvailable = geminiApiKeys.length > 0;
+    this.geminiDisableReason = geminiApiKeys.length > 0
       ? undefined
       : "GEMINI_API_KEY is not configured.";
   }
@@ -208,7 +209,11 @@ export class AiService {
   }
 
   private canUseGeminiTts(): boolean {
-    return this.geminiTtsAvailable && Boolean(this.config.geminiApiKey);
+    return this.geminiTtsAvailable && this.getGeminiApiKeys().length > 0;
+  }
+
+  private getGeminiApiKeys(): string[] {
+    return this.config.geminiApiKeys.filter((key) => Boolean(key?.trim()));
   }
 
   getTtsRequestCount(): number {
@@ -508,7 +513,7 @@ export class AiService {
   }
 
   private async synthesizeWithGemini(options: SpeechOptions): Promise<string> {
-    if (!this.config.geminiApiKey) {
+    if (this.getGeminiApiKeys().length === 0) {
       throw new Error("GEMINI_API_KEY is missing, so Gemini speech generation is unavailable.");
     }
 
@@ -533,83 +538,157 @@ export class AiService {
   }
 
   private async requestGeminiSpeech(text: string, userId: string, voiceName: string): Promise<string> {
-    if (!this.config.geminiApiKey) {
+    const geminiApiKeys = this.getGeminiApiKeys();
+    if (geminiApiKeys.length === 0) {
       throw new Error("GEMINI_API_KEY is missing, so Gemini speech generation is unavailable.");
     }
 
     const model = this.config.geminiTtsModel || GEMINI_TTS_DEFAULT_MODEL;
-    this.ttsRequestCountThisSession += 1;
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": this.config.geminiApiKey,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: text.slice(0, 3000)
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName
-              }
+    const requestBody = JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: text.slice(0, 3000)
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName
             }
           }
         }
-      })
+      }
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      const error = new Error(`Gemini TTS API error (${response.status}): ${errorText}`);
-      (error as { statusCode?: number; body?: unknown }).statusCode = response.status;
-      (error as { statusCode?: number; body?: unknown }).body = errorText;
-      throw error;
+    let lastError: Error | undefined;
+
+    for (let index = 0; index < geminiApiKeys.length; index += 1) {
+      const apiKey = geminiApiKeys[index];
+
+      try {
+        this.ttsRequestCountThisSession += 1;
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "x-goog-api-key": apiKey,
+            "Content-Type": "application/json"
+          },
+          body: requestBody
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          const error = new Error(`Gemini TTS API error (${response.status}): ${errorText}`);
+          (error as { statusCode?: number; body?: unknown }).statusCode = response.status;
+          (error as { statusCode?: number; body?: unknown }).body = errorText;
+
+          const canTryNext =
+            index < geminiApiKeys.length - 1 &&
+            this.shouldTryNextGeminiApiKey(response.status, errorText, error.message);
+
+          if (canTryNext) {
+            console.warn(
+              `[GeminiTTS] API key ${index + 1}/${geminiApiKeys.length} failed (${response.status}). Trying next configured key.`
+            );
+            lastError = error;
+            continue;
+          }
+
+          throw error;
+        }
+
+        const payload = (await response.json()) as GeminiGenerateContentResponse;
+        const inlineData = payload.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
+        const encodedAudio = inlineData?.data;
+        const mimeType = inlineData?.mimeType ?? "audio/L16;rate=24000";
+
+        if (!encodedAudio) {
+          throw new Error(`Gemini TTS returned no audio payload for voice '${voiceName}'.`);
+        }
+
+        const rawAudio = Buffer.from(encodedAudio, "base64");
+        const mimeTypeLower = mimeType.toLowerCase();
+        let fileBuffer: Buffer;
+        let extension: "mp3" | "wav";
+
+        if (mimeTypeLower.includes("audio/mpeg") || mimeTypeLower.includes("audio/mp3")) {
+          fileBuffer = rawAudio;
+          extension = "mp3";
+        } else if (mimeTypeLower.includes("audio/wav") || mimeTypeLower.includes("audio/wave")) {
+          fileBuffer = rawAudio;
+          extension = "wav";
+        } else {
+          const sampleRateMatch = mimeTypeLower.match(/rate=(\d+)/);
+          const channelsMatch = mimeTypeLower.match(/channels=(\d+)/);
+          const sampleRate = sampleRateMatch ? Number(sampleRateMatch[1]) : 24_000;
+          const channels = channelsMatch ? Number(channelsMatch[1]) : 1;
+          fileBuffer = this.createWavFromPcm16(rawAudio, sampleRate, channels);
+          extension = "wav";
+        }
+
+        const filePath = path.join(AUDIO_DIR, `${Date.now()}-${userId}-gemini-${voiceName.toLowerCase()}.${extension}`);
+        await fs.writeFile(filePath, fileBuffer);
+        return filePath;
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        const status = this.getStatusCode(normalized);
+        const body = (() => {
+          const raw = (normalized as { body?: unknown }).body;
+          return typeof raw === "string" ? raw : undefined;
+        })();
+
+        const canTryNext =
+          index < geminiApiKeys.length - 1 &&
+          this.shouldTryNextGeminiApiKey(status, body, normalized.message);
+
+        if (canTryNext) {
+          console.warn(
+            `[GeminiTTS] API key ${index + 1}/${geminiApiKeys.length} failed (${status ?? "unknown"}). Trying next configured key.`
+          );
+          lastError = normalized;
+          continue;
+        }
+
+        throw normalized;
+      }
     }
 
-    const payload = (await response.json()) as GeminiGenerateContentResponse;
-    const inlineData = payload.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData;
-    const encodedAudio = inlineData?.data;
-    const mimeType = inlineData?.mimeType ?? "audio/L16;rate=24000";
+    throw lastError ?? new Error("Gemini speech generation failed before receiving a valid response.");
+  }
 
-    if (!encodedAudio) {
-      throw new Error(`Gemini TTS returned no audio payload for voice '${voiceName}'.`);
+  private shouldTryNextGeminiApiKey(
+    status: number | undefined,
+    responseBody: string | undefined,
+    message: string
+  ): boolean {
+    if (status === undefined) {
+      return true;
     }
 
-    const rawAudio = Buffer.from(encodedAudio, "base64");
-    const mimeTypeLower = mimeType.toLowerCase();
-    let fileBuffer: Buffer;
-    let extension: "mp3" | "wav";
-
-    if (mimeTypeLower.includes("audio/mpeg") || mimeTypeLower.includes("audio/mp3")) {
-      fileBuffer = rawAudio;
-      extension = "mp3";
-    } else if (mimeTypeLower.includes("audio/wav") || mimeTypeLower.includes("audio/wave")) {
-      fileBuffer = rawAudio;
-      extension = "wav";
-    } else {
-      const sampleRateMatch = mimeTypeLower.match(/rate=(\d+)/);
-      const channelsMatch = mimeTypeLower.match(/channels=(\d+)/);
-      const sampleRate = sampleRateMatch ? Number(sampleRateMatch[1]) : 24_000;
-      const channels = channelsMatch ? Number(channelsMatch[1]) : 1;
-      fileBuffer = this.createWavFromPcm16(rawAudio, sampleRate, channels);
-      extension = "wav";
+    if (status === 401 || status === 403 || status === 429 || status >= 500) {
+      return true;
     }
 
-    const filePath = path.join(AUDIO_DIR, `${Date.now()}-${userId}-gemini-${voiceName.toLowerCase()}.${extension}`);
-    await fs.writeFile(filePath, fileBuffer);
-    return filePath;
+    if (status === 400) {
+      const combined = `${responseBody ?? ""} ${message}`.toLowerCase();
+      if (
+        combined.includes("api key") ||
+        combined.includes("api_key") ||
+        combined.includes("permission") ||
+        combined.includes("quota")
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private createWavFromPcm16(pcmData: Buffer, sampleRate: number, channels: number): Buffer {

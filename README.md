@@ -60,15 +60,23 @@ ELEVENLABS_MODEL_ID=eleven_flash_v2_5
 ELEVENLABS_USE_PYTHON_SDK=true
 PYTHON_EXECUTABLE=python
 GEMINI_API_KEY=optional_google_gemini_api_key_for_tts_fallback
+GEMINI_API_KEY_2=optional_second_google_gemini_api_key
+GEMINI_API_KEY_3=optional_third_google_gemini_api_key
+GEMINI_API_KEY_4=optional_fourth_google_gemini_api_key
 GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
 GEMINI_TTS_VOICE=Kore
 GOOGLE_API_KEY=optional_alias_for_gemini_api_key
+GOOGLE_API_KEY_2=optional_alias_for_second_gemini_key
+GOOGLE_API_KEY_3=optional_alias_for_third_gemini_key
+GOOGLE_API_KEY_4=optional_alias_for_fourth_gemini_key
 GOOGLE_TTS_MODEL=optional_alias_for_gemini_tts_model
 GOOGLE_TTS_VOICE=optional_alias_for_gemini_tts_voice
 PORT=8080
 ```
 
 `GOOGLE_API_KEY`, `GOOGLE_TTS_MODEL`, and `GOOGLE_TTS_VOICE` are accepted as aliases for the Gemini settings.
+
+For Gemini key failover, configure `GEMINI_API_KEY_2/3/4` (or `GOOGLE_API_KEY_2/3/4`). The bot tries keys in order and falls back to the next key when auth/quota/rate-limit errors occur.
 
 `ELEVENLABS_USE_PYTHON_SDK=true` makes the bot execute ElevenLabs TTS through `tts.py` using the official Python SDK. If Python execution fails, the bot falls back to the REST path automatically.
 
