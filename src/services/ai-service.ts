@@ -656,7 +656,8 @@ export class AiService {
     }
 
     const languageCode = this.resolveLanguageCode(options.language, options.fallbackLanguage);
-    const messagePath = await this.synthesizeMessage(cleanText, languageCode, options.voiceId, options.userId);
+    const polishedText = this.smartTextCleaner(cleanText, languageCode);
+    const messagePath = await this.synthesizeMessage(polishedText, languageCode, options.voiceId, options.userId);
 
     if (!options.includeSpeakerPrefix || !options.speakerName?.trim()) {
       return messagePath;
@@ -1171,6 +1172,44 @@ export class AiService {
     }
 
     return `${normalizedWhitespace.slice(0, this.config.ttsMaxChars)}...`;
+  }
+
+  private smartTextCleaner(text: string, languageCode: string): string {
+    let cleaned = text;
+
+    if (languageCode === "hi-IN" || languageCode === "gu-IN") {
+      const replacements: Array<[RegExp, string]> = [
+        [/\bh\b/gi, "he"],
+        [/\blya\b/gi, "lyaa"],
+        [/\btuh\b/gi, "too"],
+        [/\bsu\b/gi, "soo"],
+        [/\bne\b/gi, "ney"],
+        [/\bgyu\b/gi, "gyoo"],
+        [/\bchhi\b/gi, "Chhee!"],
+        [/\bna\b/gi, "naa"]
+      ];
+
+      for (const [pattern, replacement] of replacements) {
+        cleaned = cleaned.replace(pattern, replacement);
+      }
+
+      cleaned = cleaned.replace(/(?:ha|ah){2,}/gi, " Ha! Ha! Ha! ");
+
+      const isUppercase = /[A-Z]/.test(cleaned) && cleaned === cleaned.toUpperCase();
+      if (isUppercase) {
+        const lower = cleaned.toLowerCase();
+        cleaned = `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
+        if (!/[.!?]$/.test(cleaned)) {
+          cleaned += "!";
+        }
+      }
+
+      cleaned = cleaned
+        .replace(/\bbhai\b/gi, "bhai...")
+        .replace(/\bom\b/gi, "om...");
+    }
+
+    return cleaned.replace(/\s+/g, " ").trim();
   }
 
   private resolveLanguageCode(languageHint: string | undefined, fallbackLanguageHint?: string): string {
