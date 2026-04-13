@@ -64,6 +64,8 @@ export interface AppConfig {
   supabaseUrl?: string;
   supabaseServiceRoleKey?: string;
   useSupabaseStorage: boolean;
+  supabaseTtsBucket?: string;
+  supabaseTtsBucketPrefix: string;
   veniceApiKey?: string;
   veniceModel: string;
   huggingFaceApiKey?: string;
@@ -206,6 +208,8 @@ export function loadConfig(): AppConfig {
     supabaseUrl: process.env.SUPABASE_URL?.trim() || undefined,
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,
     useSupabaseStorage: envFlag("USE_SUPABASE_STORAGE", false),
+    supabaseTtsBucket: process.env.SUPABASE_TTS_BUCKET?.trim() || undefined,
+    supabaseTtsBucketPrefix: process.env.SUPABASE_TTS_BUCKET_PREFIX?.trim() || "tts-cache",
     veniceApiKey:
       process.env.VENICE_API_KEY?.trim() || process.env.VENICE_INFERENCE_KEY?.trim() || undefined,
     veniceModel: process.env.VENICE_MODEL?.trim() || "venice-uncensored",

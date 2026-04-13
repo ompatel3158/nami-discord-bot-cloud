@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import ffmpegPath from "ffmpeg-static";
-import { DATA_DIR, type AppConfig } from "../config.js";
+import { AUDIO_DIR, DATA_DIR, type AppConfig } from "../config.js";
 import type {
   Citation,
   ConversationMessage,
@@ -11,6 +11,7 @@ import type {
   TtsVoice,
   UserPreferences
 } from "../types.js";
+import { SupabaseAudioCache } from "./supabase-audio-cache.js";
 
 interface AskOptions {
   prompt: string;
@@ -101,6 +102,8 @@ export class AiService {
   private readonly ttsCacheDir = path.join(DATA_DIR, "audio_cache");
   private readonly prefixCacheDir = path.join(DATA_DIR, "audio_cache", "prefixes");
   private readonly joinedCacheDir = path.join(DATA_DIR, "audio_cache", "joined");
+  private readonly supabaseAudioCache: SupabaseAudioCache | null;
+  private readonly useSupabaseAudioCache: boolean;
   private readonly resolvedFfmpegPath = ffmpegPath as unknown as string | undefined;
   private readonly ttsCooldownByUser = new Map<string, number>();
 
@@ -116,6 +119,10 @@ export class AiService {
 
   constructor(config: AppConfig) {
     this.config = config;
+    this.supabaseAudioCache = SupabaseAudioCache.isConfigured(config)
+      ? new SupabaseAudioCache(config)
+      : null;
+    this.useSupabaseAudioCache = this.supabaseAudioCache !== null;
     this.ttsAvailable = Boolean(config.googleTtsApiKey?.trim());
     this.ttsDisableReason = this.ttsAvailable
       ? undefined
@@ -526,14 +533,18 @@ export class AiService {
     }
 
     const languageCode = this.resolveLanguageCode(options.language, cleanText);
-    const messagePath = await this.synthesizeMessage(cleanText, languageCode, options.voiceId);
+    const messagePath = await this.synthesizeMessage(cleanText, languageCode, options.voiceId, options.userId);
 
     if (!options.includeSpeakerPrefix || !options.speakerName?.trim()) {
       return messagePath;
     }
 
     const prefixPath = await this.synthesizePrefix(options.speakerName, languageCode);
-    return this.joinAudio(prefixPath, messagePath);
+    try {
+      return await this.joinAudio(prefixPath, messagePath);
+    } finally {
+      await this.cleanupTransientAudio([messagePath, prefixPath]);
+    }
   }
 
   async listVoices(languageHint?: string): Promise<Array<{ id: string; name: string; category: string }>> {
@@ -653,10 +664,21 @@ export class AiService {
   private async synthesizeMessage(
     text: string,
     languageCode: string,
-    requestedVoiceId: string | undefined
+    requestedVoiceId: string | undefined,
+    userId: string
   ): Promise<string> {
+    const textHash = this.hashKey(`${languageCode}:${text}`);
+    const objectKey = `messages/${languageCode}/${textHash}.mp3`;
+
+    if (this.useSupabaseAudioCache) {
+      const downloadedPath = await this.tryDownloadCachedAudio(objectKey, `msg-${userId}`);
+      if (downloadedPath) {
+        return downloadedPath;
+      }
+    }
+
     const cachePath = this.getTextCachePath(text, languageCode);
-    if (await this.pathExists(cachePath)) {
+    if (!this.useSupabaseAudioCache && await this.pathExists(cachePath)) {
       return cachePath;
     }
 
@@ -671,6 +693,7 @@ export class AiService {
     const candidates = this.buildVoiceCandidates(languageCode, dynamicVoiceNames, requestedVoiceId);
 
     let lastError = "no voice produced audio";
+    let synthesizedBytes: Buffer | null = null;
     for (const candidate of candidates) {
       try {
         const audioBytes = await this.callGoogleTtsApi(text, candidate);
@@ -678,14 +701,24 @@ export class AiService {
           continue;
         }
 
-        await fs.writeFile(cachePath, audioBytes);
-        return cachePath;
+        synthesizedBytes = audioBytes;
+        break;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
       }
     }
 
-    throw new Error(`All Google TTS voices failed for ${languageCode}. Last error: ${lastError}`);
+    if (!synthesizedBytes) {
+      throw new Error(`All Google TTS voices failed for ${languageCode}. Last error: ${lastError}`);
+    }
+
+    if (this.useSupabaseAudioCache) {
+      await this.saveCachedAudio(objectKey, synthesizedBytes);
+      return this.writeTempPlaybackFile(synthesizedBytes, `msg-${userId}`);
+    }
+
+    await fs.writeFile(cachePath, synthesizedBytes);
+    return cachePath;
   }
 
   private buildVoiceCandidates(
@@ -783,9 +816,18 @@ export class AiService {
     const safeName = this.normalizeDisplayName(displayName);
     const prefixText = `${safeName} said`;
     const key = this.hashKey(`prefix:${prefixText}`);
+    const objectKey = `prefixes/${key}.mp3`;
+
+    if (this.useSupabaseAudioCache) {
+      const downloadedPath = await this.tryDownloadCachedAudio(objectKey, `prefix-${safeName}`);
+      if (downloadedPath) {
+        return downloadedPath;
+      }
+    }
+
     const outPath = path.join(this.prefixCacheDir, `${key}.mp3`);
 
-    if (await this.pathExists(outPath)) {
+    if (!this.useSupabaseAudioCache && await this.pathExists(outPath)) {
       return outPath;
     }
 
@@ -802,6 +844,11 @@ export class AiService {
           continue;
         }
 
+        if (this.useSupabaseAudioCache) {
+          await this.saveCachedAudio(objectKey, bytes);
+          return this.writeTempPlaybackFile(bytes, `prefix-${safeName}`);
+        }
+
         await fs.writeFile(outPath, bytes);
         return outPath;
       } catch {
@@ -813,14 +860,29 @@ export class AiService {
   }
 
   private async joinAudio(prefixPath: string, messagePath: string): Promise<string> {
+    const prefixHash = await this.hashFile(prefixPath);
+    const messageHash = await this.hashFile(messagePath);
     const joinKey = this.hashKey(
-      `${path.parse(prefixPath).name}:${path.parse(messagePath).name}`
+      `${prefixHash}:${messageHash}`
     );
+    const objectKey = `joined/${joinKey}.mp3`;
+
+    if (this.useSupabaseAudioCache) {
+      const downloadedPath = await this.tryDownloadCachedAudio(objectKey, "joined");
+      if (downloadedPath) {
+        return downloadedPath;
+      }
+    }
+
     const outPath = path.join(this.joinedCacheDir, `${joinKey}.mp3`);
 
-    if (await this.pathExists(outPath)) {
+    if (!this.useSupabaseAudioCache && await this.pathExists(outPath)) {
       return outPath;
     }
+
+    const playbackOutPath = this.useSupabaseAudioCache
+      ? this.createTempPlaybackPath("joined")
+      : outPath;
 
     await this.runFfmpeg([
       "-hide_banner",
@@ -847,10 +909,15 @@ export class AiService {
       "-b:a",
       "128k",
       "-y",
-      outPath
+      playbackOutPath
     ]);
 
-    return outPath;
+    if (this.useSupabaseAudioCache) {
+      const joinedBytes = await fs.readFile(playbackOutPath);
+      await this.saveCachedAudio(objectKey, joinedBytes);
+    }
+
+    return playbackOutPath;
   }
 
   private async runFfmpeg(args: string[]): Promise<void> {
@@ -976,9 +1043,63 @@ export class AiService {
   }
 
   private async ensureTtsDirectories(): Promise<void> {
+    await fs.mkdir(AUDIO_DIR, { recursive: true });
     await fs.mkdir(this.ttsCacheDir, { recursive: true });
     await fs.mkdir(this.prefixCacheDir, { recursive: true });
     await fs.mkdir(this.joinedCacheDir, { recursive: true });
+  }
+
+  private createTempPlaybackPath(tag: string): string {
+    const safeTag = tag.replace(/[^a-z0-9\-_]/gi, "-").slice(0, 40) || "tts";
+    return path.join(AUDIO_DIR, `${Date.now()}-${safeTag}-${randomUUID()}.mp3`);
+  }
+
+  private async tryDownloadCachedAudio(objectKey: string, tag: string): Promise<string | undefined> {
+    if (!this.supabaseAudioCache) {
+      return undefined;
+    }
+
+    const bytes = await this.supabaseAudioCache.download(objectKey);
+    if (!bytes || bytes.length === 0) {
+      return undefined;
+    }
+
+    return this.writeTempPlaybackFile(bytes, tag);
+  }
+
+  private async saveCachedAudio(objectKey: string, payload: Buffer): Promise<void> {
+    if (!this.supabaseAudioCache) {
+      return;
+    }
+
+    await this.supabaseAudioCache.upload(objectKey, payload, "audio/mpeg");
+  }
+
+  private async writeTempPlaybackFile(payload: Buffer, tag: string): Promise<string> {
+    const outPath = this.createTempPlaybackPath(tag);
+    await fs.writeFile(outPath, payload);
+    return outPath;
+  }
+
+  private async cleanupTransientAudio(paths: string[]): Promise<void> {
+    await Promise.all(
+      paths.map(async (candidate) => {
+        if (!candidate || path.dirname(candidate) !== AUDIO_DIR) {
+          return;
+        }
+
+        try {
+          await fs.unlink(candidate);
+        } catch {
+          // Ignore cleanup errors for temporary files.
+        }
+      })
+    );
+  }
+
+  private async hashFile(filePath: string): Promise<string> {
+    const data = await fs.readFile(filePath);
+    return this.hashKey(data.toString("base64"));
   }
 
   private async pathExists(filePath: string): Promise<boolean> {

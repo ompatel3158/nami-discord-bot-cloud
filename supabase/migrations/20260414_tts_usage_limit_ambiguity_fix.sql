@@ -1,68 +1,3 @@
-create table if not exists public.guild_settings (
-  guild_id text primary key,
-  data jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.user_preferences (
-  user_id text primary key,
-  data jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists public.conversations (
-  id bigserial primary key,
-  guild_id text not null,
-  user_id text not null,
-  role text not null check (role in ('user', 'assistant')),
-  content text not null,
-  created_at timestamptz not null default now()
-);
-
-create index if not exists conversations_guild_user_created_idx
-  on public.conversations (guild_id, user_id, created_at desc);
-
-create table if not exists public.tts_usage_daily (
-  usage_date date not null,
-  scope text not null check (scope in ('global', 'guild', 'user')),
-  scope_id text not null,
-  request_count integer not null default 0,
-  character_count integer not null default 0,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  primary key (usage_date, scope, scope_id)
-);
-
-create index if not exists tts_usage_daily_scope_idx
-  on public.tts_usage_daily (scope, scope_id, usage_date desc);
-
-create or replace function public.set_updated_at()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$;
-
-drop trigger if exists guild_settings_set_updated_at on public.guild_settings;
-create trigger guild_settings_set_updated_at
-before update on public.guild_settings
-for each row execute function public.set_updated_at();
-
-drop trigger if exists user_preferences_set_updated_at on public.user_preferences;
-create trigger user_preferences_set_updated_at
-before update on public.user_preferences
-for each row execute function public.set_updated_at();
-
-drop trigger if exists tts_usage_daily_set_updated_at on public.tts_usage_daily;
-create trigger tts_usage_daily_set_updated_at
-before update on public.tts_usage_daily
-for each row execute function public.set_updated_at();
-
 create or replace function public.track_tts_usage_limit(
   p_usage_date date,
   p_user_id text,
@@ -232,20 +167,20 @@ begin
     return;
   end if;
 
-    update public.tts_usage_daily as d
+  update public.tts_usage_daily as d
   set request_count = v_user_next_requests,
       character_count = v_user_next_characters
-    where d.usage_date = v_usage_date and d.scope = 'user' and d.scope_id = p_user_id;
+  where d.usage_date = v_usage_date and d.scope = 'user' and d.scope_id = p_user_id;
 
-    update public.tts_usage_daily as d
+  update public.tts_usage_daily as d
   set request_count = v_guild_next_requests,
       character_count = v_guild_next_characters
-    where d.usage_date = v_usage_date and d.scope = 'guild' and d.scope_id = p_guild_id;
+  where d.usage_date = v_usage_date and d.scope = 'guild' and d.scope_id = p_guild_id;
 
-    update public.tts_usage_daily as d
+  update public.tts_usage_daily as d
   set request_count = v_global_next_requests,
       character_count = v_global_next_characters
-    where d.usage_date = v_usage_date and d.scope = 'global' and d.scope_id = 'global';
+  where d.usage_date = v_usage_date and d.scope = 'global' and d.scope_id = 'global';
 
   return query
   select true,
@@ -259,8 +194,3 @@ begin
     v_global_next_characters;
 end;
 $$;
-
-alter table public.guild_settings enable row level security;
-alter table public.user_preferences enable row level security;
-alter table public.conversations enable row level security;
-alter table public.tts_usage_daily enable row level security;

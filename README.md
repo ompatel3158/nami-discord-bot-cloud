@@ -70,6 +70,8 @@ TTS_DAILY_GLOBAL_CHARACTER_LIMIT=2400000
 SUPABASE_URL=optional_supabase_project_url
 SUPABASE_SERVICE_ROLE_KEY=optional_supabase_service_role_key
 USE_SUPABASE_STORAGE=false
+SUPABASE_TTS_BUCKET=optional_supabase_storage_bucket_for_tts_cache
+SUPABASE_TTS_BUCKET_PREFIX=tts-cache
 INTERNAL_KEEPALIVE_ENABLED=false
 INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14
 INTERNAL_KEEPALIVE_URL=optional_absolute_healthcheck_url
@@ -77,6 +79,8 @@ PORT=8080
 ```
 
 Set `USE_SUPABASE_STORAGE=true` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to use Supabase for guild settings, user preferences, and conversation history. If disabled (or if keys are missing), Nami falls back to local JSON storage.
+
+Set `SUPABASE_TTS_BUCKET` to enable Supabase Storage-backed TTS cache objects (`messages/`, `prefixes/`, `joined/`). This is recommended on Render so cache survives restarts and does not depend on ephemeral local disk. Use `SUPABASE_TTS_BUCKET_PREFIX` to namespace objects.
 
 `GOOGLE_TTS_*` and `TTS_*` variables are used by the active runtime TTS path.
 
@@ -124,6 +128,8 @@ If your local IP is rate-limited or blocked by provider anti-abuse checks, deplo
    - `GOOGLE_TTS_PITCH` (optional)
    - `TTS_MAX_CHARS` (optional)
    - `TTS_COOLDOWN_SECONDS` (optional)
+   - `SUPABASE_TTS_BUCKET` (recommended on Render for persistent audio cache)
+   - `SUPABASE_TTS_BUCKET_PREFIX` (optional; defaults to `tts-cache`)
    - `INTERNAL_KEEPALIVE_ENABLED=true` (optional, default true in production)
    - `INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14` (optional)
    - `INTERNAL_KEEPALIVE_URL` (optional absolute URL; defaults to `/healthz` target)
@@ -153,7 +159,9 @@ Both return JSON status including bot readiness and TTS availability.
 ## Notes
 
 - Nami stores server settings, user preferences, and short chat history in Supabase when enabled, otherwise in `data/storage.json`.
-- Generated live playback files are created under `data/audio`, while Google TTS cache files persist under `data/audio_cache`.
+- Generated live playback files are created under `data/audio`.
+- When `SUPABASE_TTS_BUCKET` is set, long-lived TTS cache objects are stored in Supabase Storage and only short-lived playback temp files use local disk.
+- Without `SUPABASE_TTS_BUCKET`, Google TTS cache files persist under `data/audio_cache`.
 - `/tts voices` shows Google voice IDs.
 - Set your preferred voice with `/preferences voice voice_id:<id>`.
 - TTS speech language now defaults to server-level Hindi. Change it with `/voice language value:<language>` or `/admin tts-language value:<language>`.
