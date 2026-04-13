@@ -57,12 +57,7 @@ function readEnvInt(name: string, fallback: number): number {
 ensureRuntimeDirectories();
 const storage = createStorageBackend();
 const games = new GameService();
-const ai =
-  config.openRouterApiKey ||
-  config.veniceApiKey ||
-  config.cartesiaApiKey
-    ? new AiService(config)
-    : null;
+const ai = new AiService(config);
 const voicePlayer = new VoiceService();
 
 const context: CommandContext = {
@@ -263,19 +258,44 @@ client.on(Events.MessageCreate, async (message) => {
             const preferences = await storage.getUserPreferences(message.author.id);
             const previousSpeaker = lastAutoVoiceSpeakerByGuild.get(message.guildId);
             const speakerName = member.displayName || message.author.username;
-            const speechText = previousSpeaker === message.author.id
-              ? spokenContent
-              : `${speakerName} said: ${spokenContent}`;
+            const speakerChanged = previousSpeaker !== message.author.id;
+            const cooldownLeft = context.ai.getTtsCooldownRemainingSeconds(message.author.id);
 
-            const filePath = await context.ai.synthesizeSpeech({
-              text: speechText,
-              voiceId: preferences.voice,
-              language: settings.ttsLanguage,
-              speed: preferences.ttsSpeed,
-              userId: message.author.id
-            });
-            await context.voicePlayer.enqueue(member, filePath, preferences.ttsSpeed);
-            lastAutoVoiceSpeakerByGuild.set(message.guildId, message.author.id);
+            if (cooldownLeft <= 0) {
+              const estimatedCharacters = Math.max(0, Math.min(spokenContent.length, config.ttsMaxChars));
+              const limitResult = await storage.trackTtsUsageAndCheckLimit({
+                guildId: message.guildId,
+                userId: message.author.id,
+                characters: estimatedCharacters,
+                userRequestLimit: config.ttsDailyUserRequestLimit,
+                userCharacterLimit: config.ttsDailyUserCharacterLimit,
+                guildRequestLimit: config.ttsDailyGuildRequestLimit,
+                guildCharacterLimit: config.ttsDailyGuildCharacterLimit,
+                globalRequestLimit: config.ttsDailyGlobalRequestLimit,
+                globalCharacterLimit: config.ttsDailyGlobalCharacterLimit
+              });
+
+              if (!limitResult.allowed) {
+                console.warn(
+                  `[AutoRead] TTS limit reached for user ${message.author.id} in guild ${message.guildId}: ${limitResult.reason ?? "limit exceeded"}`
+                );
+                return;
+              }
+
+              context.ai.markTtsCooldown(message.author.id);
+
+              const filePath = await context.ai.synthesizeSpeech({
+                text: spokenContent,
+                voiceId: preferences.voice,
+                language: settings.ttsLanguage,
+                speed: preferences.ttsSpeed,
+                userId: message.author.id,
+                speakerName,
+                includeSpeakerPrefix: speakerChanged
+              });
+              await context.voicePlayer.enqueue(member, filePath, preferences.ttsSpeed);
+              lastAutoVoiceSpeakerByGuild.set(message.guildId, message.author.id);
+            }
           }
         }
       }
@@ -402,8 +422,8 @@ async function runStartupChecks(): Promise<void> {
     console.log(`[Startup] ${status}`);
     if (!context.ai.isTtsAvailable()) {
       console.log("[Startup] No TTS provider is enabled; TTS commands and auto-read will be skipped.");
-    } else if (context.ai.isCartesiaTtsAvailable()) {
-      console.log("[Startup] Cartesia TTS is active.");
+    } else if (context.ai.isGoogleTtsAvailable()) {
+      console.log("[Startup] Google TTS is active.");
     }
   } catch (error) {
     console.error("[Startup] TTS startup check failed", error);

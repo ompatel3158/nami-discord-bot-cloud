@@ -62,7 +62,7 @@ export function createCommands(): BotCommand[] {
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "ai");
       if (!context.ai) {
-        throw new Error("OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode) are required for AI replies.");
+        throw new Error("OPENROUTER_API_KEY (smart mode) and OLLAMA_BASE_URL/OLLAMA_MODEL (uncensored mode) are required for AI replies.");
       }
       const guildId = requireGuildId(interaction);
       const settings = context.storage.getGuildSettings(guildId);
@@ -122,8 +122,8 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) =>
         subcommand
           .setName("voice")
-          .setDescription("Set your preferred Cartesia voice ID and TTS tuning.")
-          .addStringOption((option) => option.setName("voice_id").setDescription("Voice ID from Cartesia or 'default'").setRequired(true))
+          .setDescription("Set your preferred Google voice ID and TTS tuning.")
+          .addStringOption((option) => option.setName("voice_id").setDescription("Voice ID from Google TTS or 'default'").setRequired(true))
           .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.25 to 4.0"))
           .addStringOption((option) => option.setName("instructions").setDescription("Saved speech notes for your own reference"))
       )
@@ -309,22 +309,22 @@ export function createCommands(): BotCommand[] {
   const tts: BotCommand = {
     data: new SlashCommandBuilder()
       .setName("tts")
-      .setDescription("Speak text in voice chat using Cartesia voices.")
+      .setDescription("Speak text in voice chat using Google Cloud TTS voices.")
       .addSubcommand((subcommand) =>
         subcommand
           .setName("say")
           .setDescription("Speak a message in your voice channel.")
           .addStringOption((option) => option.setName("text").setDescription("What should Nami say?").setRequired(true))
-          .addStringOption((option) => option.setName("voice").setDescription("Cartesia voice ID or leave blank for your saved default"))
+          .addStringOption((option) => option.setName("voice").setDescription("Google voice ID or leave blank for your saved default"))
           .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.25 to 4.0"))
           .addStringOption((option) => option.setName("instructions").setDescription("Saved speech notes for your own reference"))
       )
       .addSubcommand((subcommand) => subcommand.setName("stop").setDescription("Stop speaking and clear the queue."))
-      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List the voices available on your Cartesia account.")),
+      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List the voices available on your Google TTS account.")),
     async execute(interaction, context) {
       requireFeature(interaction, context.storage, "tts");
       if (!context.ai || !context.voice) {
-        throw new Error("CARTESIA_API_KEY is missing, so AI text-to-speech is not available yet.");
+        throw new Error("GOOGLE_TTS_KEY is missing, so AI text-to-speech is not available yet.");
       }
       const subcommand = interaction.options.getSubcommand();
       if (subcommand === "voices") {
@@ -333,7 +333,7 @@ export function createCommands(): BotCommand[] {
           .slice(0, 15)
           .map((voiceInfo) => `- **${voiceInfo.name}** (\`${voiceInfo.id}\`) [${voiceInfo.category}]`)
           .join("\n");
-        await respond(interaction, `Available voices:\n${list || "No voices were returned by Cartesia."}`, { ephemeral: true });
+        await respond(interaction, `Available voices:\n${list || "No voices were returned by Google TTS."}`, { ephemeral: true });
         return;
       }
       const guildId = requireGuildId(interaction);
@@ -468,7 +468,7 @@ export function createCommands(): BotCommand[] {
           "`@Nami <message>` - chat naturally by mentioning the bot in a server",
           "`/search query:<text>` - web search summary with source links",
           "`/preferences ...` - your voice ID, speed, language, answer style, and default search",
-          "`/tts voices` - list the Cartesia voice IDs available to your API key",
+          "`/tts voices` - list the Google TTS voice IDs available to your API key",
           "`/game guess-start`, `/game guess-pick`, `/game trivia`, `/game scramble`, `/game rps`, `/game coinflip`",
           "`/voice join`, `/voice leave`, `/tts say`, `/tts stop` - voice chat controls",
           "`/admin ...` - feature flags, prompts, announcements, and history cleanup"

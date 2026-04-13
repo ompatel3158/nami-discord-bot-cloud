@@ -3,7 +3,7 @@ import { DEFAULT_USER_PREFERENCES, type AppConfig } from "./config.js";
 import { AiService } from "./services/ai-service.js";
 import { GameService } from "./services/game-service.js";
 import { VoiceService } from "./services/voice-service.js";
-import type { StorageProvider } from "./storage.js";
+import type { StorageProvider, TtsLimitCheckResult } from "./storage.js";
 import type { AiModelMode, FeatureFlag } from "./types.js";
 import { clamp, formatCitationBlock, respond, requireGuildId } from "./utils.js";
 
@@ -29,8 +29,21 @@ const featureChoices: Array<{ name: string; value: FeatureFlag }> = [
 
 const modelChoices: Array<{ name: string; value: AiModelMode }> = [
   { name: "Smart (default)", value: "smart" },
-  { name: "Uncensored (Venice)", value: "uncensored" }
+  { name: "Uncensored (Ollama)", value: "uncensored" }
 ];
+
+const lastTtsSpeakerByGuild = new Map<string, string>();
+
+function formatLimitUsage(result: TtsLimitCheckResult): string {
+  const userRequest = result.user.requestLimit
+    ? `${result.user.requestCount}/${result.user.requestLimit}`
+    : `${result.user.requestCount}`;
+  const userCharacters = result.user.characterLimit
+    ? `${result.user.characterCount}/${result.user.characterLimit}`
+    : `${result.user.characterCount}`;
+
+  return `Date ${result.usageDate}. User requests: ${userRequest}. User chars: ${userCharacters}.`;
+}
 
 async function requireFeature(
   interaction: ChatInputCommandInteraction,
@@ -55,7 +68,7 @@ export function createCommands(): BotCommand[] {
       .addBooleanOption((option) => option.setName("web").setDescription("Let Nami search the web before answering.").setRequired(false)),
     async execute(interaction, context) {
       await requireFeature(interaction, context.storage, "ai");
-      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode).");
+      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and OLLAMA_BASE_URL/OLLAMA_MODEL (uncensored mode).");
       const guildId = requireGuildId(interaction);
       const settings = await context.storage.getGuildSettings(guildId);
       const preferences = await context.storage.getUserPreferences(interaction.user.id);
@@ -84,7 +97,7 @@ export function createCommands(): BotCommand[] {
       .addStringOption((option) => option.setName("query").setDescription("What should Nami search for?").setRequired(true)),
     async execute(interaction, context) {
       await requireFeature(interaction, context.storage, "search");
-      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and VENICE_API_KEY (uncensored mode).");
+      if (!context.ai) throw new Error("No AI provider is configured yet. Set OPENROUTER_API_KEY (smart mode) and OLLAMA_BASE_URL/OLLAMA_MODEL (uncensored mode).");
       const query = interaction.options.getString("query", true);
       const preferences = await context.storage.getUserPreferences(interaction.user.id);
       await respond(interaction, "Searching the web...", { defer: true });
@@ -96,10 +109,16 @@ export function createCommands(): BotCommand[] {
   const preferences: BotCommand = {
     data: new SlashCommandBuilder().setName("preferences").setDescription("Set your Nami preferences.")
       .addSubcommand((subcommand) => subcommand.setName("view").setDescription("Show your current settings."))
-      .addSubcommand((subcommand) => subcommand.setName("voice").setDescription("Set your preferred Cartesia voice and playback speed.")
-        .addStringOption((option) => option.setName("voice_id").setDescription("Cartesia voice ID from /tts voices").setRequired(false))
+      .addSubcommand((subcommand) => subcommand.setName("voice").setDescription("Set your preferred Google TTS voice and playback speed.")
+        .addStringOption((option) => option.setName("voice_id").setDescription("Google voice ID from /tts voices").setRequired(false))
         .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.7 to 1.2").setRequired(false)))
-      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("Show voices and how to set one quickly."))
+      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("Show voices and how to set one quickly.")
+        .addStringOption((option) => option.setName("language").setDescription("Filter voices by language").setRequired(false).addChoices(
+          { name: "Auto", value: "auto" },
+          { name: "Hindi", value: "hi" },
+          { name: "Gujarati", value: "gu" },
+          { name: "English", value: "en" }
+        )))
       .addSubcommand((subcommand) => subcommand.setName("model").setDescription("Choose your AI model behavior.")
         .addStringOption((option) => option.setName("mode").setDescription("Smart or uncensored").setRequired(true).addChoices(...modelChoices)))
       .addSubcommand((subcommand) => subcommand.setName("search").setDescription("Choose whether /ask should use web search by default.")
@@ -122,15 +141,16 @@ export function createCommands(): BotCommand[] {
         return;
       }
       if (subcommand === "voices") {
-        if (!context.ai) throw new Error("No TTS provider is configured yet (set CARTESIA_API_KEY).");
+        if (!context.ai) throw new Error("No TTS provider is configured yet (set GOOGLE_TTS_KEY).");
         await respond(interaction, "Loading available voices...", { defer: true });
-        const voices = await context.ai.listVoices();
+        const language = interaction.options.getString("language") ?? undefined;
+        const voices = await context.ai.listVoices(language);
         const providerList = voices.slice(0, 25);
         const providerText = providerList.length
           ? providerList.map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
-          : "No Cartesia voices were returned.";
+          : "No Google voices were returned.";
         await respond(interaction, [
-          "Cartesia voices:",
+          "Google TTS voices:",
           providerText,
           "",
           "Set defaults with: `/preferences voice voice_id:<id>`"
@@ -345,36 +365,81 @@ export function createCommands(): BotCommand[] {
         return;
       }
       await context.voicePlayer.leave(guildId);
+      lastTtsSpeakerByGuild.delete(guildId);
       await respond(interaction, "Left the voice channel and cleared the queue.");
     }
   };
 
   const tts: BotCommand = {
-    data: new SlashCommandBuilder().setName("tts").setDescription("Speak text in voice chat using Cartesia.")
+    data: new SlashCommandBuilder().setName("tts").setDescription("Speak text in voice chat using Google Cloud TTS.")
       .addSubcommand((subcommand) => subcommand.setName("say").setDescription("Speak a message in your voice channel.")
         .addStringOption((option) => option.setName("text").setDescription("What should Nami say?").setRequired(true))
-        .addStringOption((option) => option.setName("voice_id").setDescription("Optional Cartesia voice ID").setRequired(false))
+        .addStringOption((option) => option.setName("voice_id").setDescription("Optional Google voice ID").setRequired(false))
         .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.7 to 1.2").setRequired(false)))
       .addSubcommand((subcommand) => subcommand.setName("stop").setDescription("Stop speaking and clear the queue."))
-      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List available Cartesia voices.")),
+      .addSubcommand((subcommand) => subcommand.setName("skip").setDescription("Skip the current audio and continue queue playback."))
+      .addSubcommand((subcommand) => subcommand.setName("clearqueue").setDescription("Clear all queued messages and stop playback."))
+      .addSubcommand((subcommand) => subcommand.setName("info").setDescription("Show TTS queue and runtime status."))
+      .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List available Google TTS voices.")
+        .addStringOption((option) => option.setName("language").setDescription("Filter voices by language").setRequired(false).addChoices(
+          { name: "Auto", value: "auto" },
+          { name: "Hindi", value: "hi" },
+          { name: "Gujarati", value: "gu" },
+          { name: "English", value: "en" }
+        ))),
     async execute(interaction, context) {
       await requireFeature(interaction, context.storage, "tts");
-      if (!context.ai) throw new Error("No TTS provider is configured yet (set CARTESIA_API_KEY).");
+      if (!context.ai) throw new Error("No TTS provider is configured yet (set GOOGLE_TTS_KEY).");
       if (!context.voicePlayer) throw new Error("Voice playback service is unavailable right now.");
       const subcommand = interaction.options.getSubcommand();
+      const guildId = requireGuildId(interaction);
+
       if (subcommand === "voices") {
         await respond(interaction, "Loading available voices...", { defer: true });
-        const voices = await context.ai.listVoices();
+        const language = interaction.options.getString("language") ?? undefined;
+        const voices = await context.ai.listVoices(language);
         const providerText = voices.length
           ? voices.slice(0, 25).map((voiceInfo) => `- **${voiceInfo.name}** (${voiceInfo.category}): \`${voiceInfo.id}\``).join("\n")
-          : "No Cartesia voices were returned.";
-        await respond(interaction, `Cartesia voices:\n${providerText}`, { ephemeral: true });
+          : "No Google voices were returned.";
+        await respond(interaction, `Google TTS voices:\n${providerText}`, { ephemeral: true });
         return;
       }
-      const guildId = requireGuildId(interaction);
+
+      if (subcommand === "skip") {
+        const skipped = await context.voicePlayer.skip(guildId);
+        await respond(interaction, skipped ? "Skipped the current audio." : "Nothing is currently playing.");
+        return;
+      }
+
+      if (subcommand === "clearqueue") {
+        await context.voicePlayer.stop(guildId);
+        lastTtsSpeakerByGuild.delete(guildId);
+        await respond(interaction, "Queue cleared and playback stopped.");
+        return;
+      }
+
+      if (subcommand === "info") {
+        const queueLength = context.voicePlayer.getQueueLength(guildId);
+        const isPlaying = context.voicePlayer.isPlaying(guildId);
+        const connected = context.voicePlayer.hasConnection(guildId);
+        await respond(
+          interaction,
+          [
+            "TTS status:",
+            `Connected: **${connected ? "yes" : "no"}**`,
+            `Playing: **${isPlaying ? "yes" : "no"}**`,
+            `Queued items: **${queueLength}**`,
+            `Session API calls: **${context.ai.getTtsRequestCount()}**`
+          ].join("\n"),
+          { ephemeral: true }
+        );
+        return;
+      }
+
       const guildSettings = await context.storage.getGuildSettings(guildId);
       if (subcommand === "stop") {
         await context.voicePlayer.stop(guildId);
+        lastTtsSpeakerByGuild.delete(guildId);
         await respond(interaction, "Stopped speaking and cleared the queue.");
         return;
       }
@@ -383,6 +448,11 @@ export function createCommands(): BotCommand[] {
       const text = interaction.options.getString("text", true);
       const voiceId = interaction.options.getString("voice_id") ?? preferences.voice;
       const speed = clamp(interaction.options.getNumber("speed") ?? preferences.ttsSpeed, 0.7, 1.2);
+      const cooldownRemaining = context.ai.getTtsCooldownRemainingSeconds(interaction.user.id);
+
+      if (cooldownRemaining > 0) {
+        throw new Error(`Cooldown active. Wait ${cooldownRemaining.toFixed(1)}s before sending another TTS request.`);
+      }
 
       if (subcommand === "say" && !context.ai.isTtsAvailable()) {
         await respond(interaction, "TTS is currently unavailable. Re-checking service status...", { defer: true });
@@ -396,16 +466,40 @@ export function createCommands(): BotCommand[] {
         await respond(interaction, "Generating speech...", { defer: true });
       }
 
+      const estimatedCharacters = Math.max(0, Math.min(text.trim().length, context.config.ttsMaxChars));
+      const limitResult = await context.storage.trackTtsUsageAndCheckLimit({
+        guildId,
+        userId: interaction.user.id,
+        characters: estimatedCharacters,
+        userRequestLimit: context.config.ttsDailyUserRequestLimit,
+        userCharacterLimit: context.config.ttsDailyUserCharacterLimit,
+        guildRequestLimit: context.config.ttsDailyGuildRequestLimit,
+        guildCharacterLimit: context.config.ttsDailyGuildCharacterLimit,
+        globalRequestLimit: context.config.ttsDailyGlobalRequestLimit,
+        globalCharacterLimit: context.config.ttsDailyGlobalCharacterLimit
+      });
+
+      if (!limitResult.allowed) {
+        throw new Error(`${limitResult.reason ?? "TTS limit reached."} ${formatLimitUsage(limitResult)}`);
+      }
+
+      context.ai.markTtsCooldown(interaction.user.id);
+      const speakerChanged = lastTtsSpeakerByGuild.get(guildId) !== interaction.user.id;
+      const speakerName = member.displayName || interaction.user.username;
+
       const filePath = await context.ai.synthesizeSpeech({
         text,
         voiceId,
         language: guildSettings.ttsLanguage,
         speed,
-        userId: interaction.user.id
+        userId: interaction.user.id,
+        speakerName,
+        includeSpeakerPrefix: speakerChanged
       });
       const queueDepth = await context.voicePlayer.enqueue(member, filePath, speed);
+      lastTtsSpeakerByGuild.set(guildId, interaction.user.id);
       const queueMessage = queueDepth > 1 ? `Queued. There are **${queueDepth - 1}** item(s) ahead of this one.` : "Playing now.";
-      await respond(interaction, `${queueMessage}\nCartesia voice: **${voiceId || "default"}**\nLanguage: **${guildSettings.ttsLanguage}**\nSpeed: **${speed}x**.`);
+      await respond(interaction, `${queueMessage}\nGoogle voice: **${voiceId || "default"}**\nLanguage: **${guildSettings.ttsLanguage}**\nSpeed: **${speed}x**.`);
     }
   };
 
@@ -482,16 +576,16 @@ export function createCommands(): BotCommand[] {
       await respond(interaction, [
         "**Nami command guide**",
         "`/ask prompt:<text> web:<true|false>` - AI answers, optionally with web search",
-        "`/preferences model mode:<smart|uncensored>` - switch AI mode (smart=OpenRouter, uncensored=Venice)",
+        "`/preferences model mode:<smart|uncensored>` - switch AI mode (smart=OpenRouter, uncensored=Ollama)",
         "`@Nami <message>` - chat naturally by mentioning the bot in a server",
         "`/search query:<text>` - web search summary with source links",
         "`/preferences ...` - your voice IDs, speed, model mode, language, and default search",
         "`/voice language value:<language>` - set server TTS/auto-read language (Manage Server required)",
         "`/memory view`, `/memory clear` - see or clear remembered conversation",
         "`/voice auto-read`, `/voice autojoin` - automatic VC speech behavior",
-        "`/tts voices` - list available Cartesia voices",
+        "`/tts voices` - list available Google TTS voices",
         "`/game guess-start`, `/game guess-pick`, `/game trivia`, `/game scramble`, `/game rps`, `/game coinflip`",
-        "`/voice join`, `/voice leave`, `/tts say`, `/tts stop` - voice chat controls",
+        "`/voice join`, `/voice leave`, `/tts say`, `/tts skip`, `/tts clearqueue`, `/tts stop` - voice chat controls",
         "`/admin ...` - feature flags, prompts, announcements, TTS language, and history cleanup"
       ].join("\n"), { ephemeral: true });
     }

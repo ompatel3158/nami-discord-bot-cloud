@@ -4,7 +4,7 @@ import {
   DEFAULT_USER_PREFERENCES,
   type AppConfig
 } from "../config.js";
-import type { StorageProvider } from "../storage.js";
+import type { StorageProvider, TtsLimitCheckInput, TtsLimitCheckResult } from "../storage.js";
 import type {
   ConversationMessage,
   GuildSettings,
@@ -30,6 +30,18 @@ interface ConversationRow {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+}
+
+interface TtsUsageLimitRpcRow {
+  allowed: boolean;
+  reason: string | null;
+  usage_date: string;
+  user_request_count: number;
+  user_character_count: number;
+  guild_request_count: number;
+  guild_character_count: number;
+  global_request_count: number;
+  global_character_count: number;
 }
 
 function deepClone<T>(value: T): T {
@@ -258,5 +270,58 @@ export class SupabaseStorage implements StorageProvider {
     }
 
     return count ?? 0;
+  }
+
+  async trackTtsUsageAndCheckLimit(input: TtsLimitCheckInput): Promise<TtsLimitCheckResult> {
+    const billableCharacters = Math.max(0, Math.floor(input.characters));
+
+    const { data, error } = await this.client.rpc("track_tts_usage_limit", {
+      p_usage_date: new Date().toISOString().slice(0, 10),
+      p_user_id: input.userId,
+      p_guild_id: input.guildId,
+      p_characters: billableCharacters,
+      p_user_request_limit: input.userRequestLimit ?? null,
+      p_user_character_limit: input.userCharacterLimit ?? null,
+      p_guild_request_limit: input.guildRequestLimit ?? null,
+      p_guild_character_limit: input.guildCharacterLimit ?? null,
+      p_global_request_limit: input.globalRequestLimit ?? null,
+      p_global_character_limit: input.globalCharacterLimit ?? null
+    });
+
+    if (error) {
+      throw new Error(`Failed to track TTS usage limits in Supabase: ${error.message}`);
+    }
+
+    const row = Array.isArray(data)
+      ? ((data[0] as TtsUsageLimitRpcRow | undefined) ?? undefined)
+      : (data as TtsUsageLimitRpcRow | undefined);
+
+    if (!row) {
+      throw new Error("Supabase TTS usage tracker returned no result row.");
+    }
+
+    return {
+      allowed: row.allowed,
+      reason: row.reason ?? undefined,
+      usageDate: row.usage_date,
+      user: {
+        requestCount: row.user_request_count,
+        characterCount: row.user_character_count,
+        requestLimit: input.userRequestLimit,
+        characterLimit: input.userCharacterLimit
+      },
+      guild: {
+        requestCount: row.guild_request_count,
+        characterCount: row.guild_character_count,
+        requestLimit: input.guildRequestLimit,
+        characterLimit: input.guildCharacterLimit
+      },
+      global: {
+        requestCount: row.global_request_count,
+        characterCount: row.global_character_count,
+        requestLimit: input.globalRequestLimit,
+        characterLimit: input.globalCharacterLimit
+      }
+    };
   }
 }

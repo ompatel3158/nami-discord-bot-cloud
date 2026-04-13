@@ -8,10 +8,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: CARTESIA_VERSION
-        value: "2026-03-01"
-      - key: CARTESIA_MODEL
-        value: sonic-3
+      - key: OLLAMA_BASE_URL
+        value: https://api.ollama.com
+      - key: OLLAMA_MODEL
+        value: llama3.1:8b
       - key: USE_SUPABASE_STORAGE
         value: "false"
       - key: INTERNAL_KEEPALIVE_ENABLED
@@ -20,5 +20,19 @@ services:
         value: "14"
       - key: OPENROUTER_MODEL
         value: nvidia/nemotron-3-super-120b-a12b:free
-      - key: VENICE_MODEL
-        value: venice-uncensored
+      - key: TTS_MAX_CHARS
+        value: "250"
+      - key: TTS_COOLDOWN_SECONDS
+        value: "2"
+      - key: TTS_DAILY_USER_REQUEST_LIMIT
+        value: "300"
+      - key: TTS_DAILY_USER_CHARACTER_LIMIT
+        value: "75000"
+      - key: TTS_DAILY_GUILD_REQUEST_LIMIT
+        value: "3000"
+      - key: TTS_DAILY_GUILD_CHARACTER_LIMIT
+        value: "600000"
+      - key: TTS_DAILY_GLOBAL_REQUEST_LIMIT
+        value: "12000"
+      - key: TTS_DAILY_GLOBAL_CHARACTER_LIMIT
+        value: "2400000"

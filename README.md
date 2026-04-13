@@ -4,13 +4,13 @@ Nami is a modular Discord bot built with `discord.js` and TypeScript.
 
 It supports:
 
-- AI Q&A through OpenRouter for smart mode and Venice for uncensored mode
+- AI Q&A through OpenRouter for smart mode and Ollama for uncensored mode
 - Chat-style replies when users mention `@Nami`
 - Web search summaries using DuckDuckGo search results plus AI summarization
 - Text games like guessing, trivia, scramble, rock-paper-scissors, and coinflip
-- Text-to-speech in voice channels with Cartesia
+- Text-to-speech in voice channels with Google Cloud Text-to-Speech
 - Storage backed by local JSON or Supabase
-- Per-user preferences for Cartesia voice ID, speed, language, and AI reply style
+- Per-user preferences for Google voice ID, speed, language, and AI reply style
 - Per-user model mode switch (smart vs uncensored)
 - Server-level TTS language for both `/tts say` and auto voice read
 - Optional auto voice reading in VC with auto-join include/exclude controls
@@ -22,10 +22,10 @@ It supports:
 - TypeScript
 - `discord.js`
 - `@discordjs/voice`
-- Venice chat completions API for uncensored model chat
+- Ollama `/api/chat` for uncensored model chat
 - OpenRouter for text generation
 - DuckDuckGo HTML search for free web search results
-- Cartesia websocket TTS
+- Google Cloud Text-to-Speech REST API
 - Supabase as an optional runtime storage backend
 - `node-cron` for internal keepalive scheduling
 
@@ -50,18 +50,26 @@ It supports:
 DISCORD_TOKEN=your_discord_bot_token
 DISCORD_CLIENT_ID=your_discord_application_id
 DISCORD_GUILD_ID=optional_guild_id_for_fast_dev_command_registration
-CARTESIA_API_KEY=optional_cartesia_api_key
-CARTESIA_VERSION=2026-03-01
-CARTESIA_MODEL=sonic-3
-CARTESIA_DEFAULT_VOICE_ID=f786b574-daa5-4673-aa0c-cbe3e8534c02
-CARTESIA_MAX_BUFFER_DELAY_MS=3000
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+OLLAMA_BASE_URL=https://api.ollama.com
+OLLAMA_MODEL=llama3.1:8b
+OLLAMA_API_KEY=optional_ollama_api_key
+OLLAMA_TIMEOUT_MS=30000
+GOOGLE_TTS_KEY=your_google_cloud_api_key
+GOOGLE_TTS_SPEAKING_RATE=1
+GOOGLE_TTS_PITCH=0
+TTS_MAX_CHARS=250
+TTS_COOLDOWN_SECONDS=2
+TTS_DAILY_USER_REQUEST_LIMIT=300
+TTS_DAILY_USER_CHARACTER_LIMIT=75000
+TTS_DAILY_GUILD_REQUEST_LIMIT=3000
+TTS_DAILY_GUILD_CHARACTER_LIMIT=600000
+TTS_DAILY_GLOBAL_REQUEST_LIMIT=12000
+TTS_DAILY_GLOBAL_CHARACTER_LIMIT=2400000
 SUPABASE_URL=optional_supabase_project_url
 SUPABASE_SERVICE_ROLE_KEY=optional_supabase_service_role_key
 USE_SUPABASE_STORAGE=false
-VENICE_API_KEY=your_venice_api_key
-VENICE_MODEL=venice-uncensored
-OPENROUTER_API_KEY=your_openrouter_api_key
-OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 INTERNAL_KEEPALIVE_ENABLED=false
 INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14
 INTERNAL_KEEPALIVE_URL=optional_absolute_healthcheck_url
@@ -70,7 +78,11 @@ PORT=8080
 
 Set `USE_SUPABASE_STORAGE=true` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to use Supabase for guild settings, user preferences, and conversation history. If disabled (or if keys are missing), Nami falls back to local JSON storage.
 
-`CARTESIA_*` variables are used by the active runtime TTS path.
+`GOOGLE_TTS_*` and `TTS_*` variables are used by the active runtime TTS path.
+
+Daily TTS limit tracking is persisted in Supabase when `USE_SUPABASE_STORAGE=true` and enforced atomically to remain safe under parallel requests.
+
+`OLLAMA_BASE_URL` and `OLLAMA_MODEL` are required for uncensored mode. Set `OLLAMA_API_KEY` when your hosted Ollama endpoint requires bearer auth.
 
 Internal keepalive cron is production-enabled by default and runs every 14 minutes. Override with `INTERNAL_KEEPALIVE_ENABLED`, `INTERNAL_KEEPALIVE_INTERVAL_MINUTES`, and optional `INTERNAL_KEEPALIVE_URL`.
 
@@ -101,15 +113,17 @@ If your local IP is rate-limited or blocked by provider anti-abuse checks, deplo
    - `DISCORD_TOKEN`
    - `DISCORD_CLIENT_ID`
    - `DISCORD_GUILD_ID` (recommended for fast command updates)
-   - `VENICE_API_KEY` (required for uncensored mode)
-   - `VENICE_MODEL` (default `venice-uncensored`)
    - `OPENROUTER_API_KEY`
    - `OPENROUTER_MODEL`
-   - `CARTESIA_API_KEY`
-   - `CARTESIA_VERSION` (default `2026-03-01`)
-   - `CARTESIA_MODEL` (default `sonic-3`)
-   - `CARTESIA_DEFAULT_VOICE_ID` (optional)
-   - `CARTESIA_MAX_BUFFER_DELAY_MS` (optional)
+   - `OLLAMA_BASE_URL` (required for uncensored mode)
+   - `OLLAMA_MODEL` (required for uncensored mode)
+   - `OLLAMA_API_KEY` (optional, required for protected endpoints)
+   - `OLLAMA_TIMEOUT_MS` (optional)
+   - `GOOGLE_TTS_KEY`
+   - `GOOGLE_TTS_SPEAKING_RATE` (optional)
+   - `GOOGLE_TTS_PITCH` (optional)
+   - `TTS_MAX_CHARS` (optional)
+   - `TTS_COOLDOWN_SECONDS` (optional)
    - `INTERNAL_KEEPALIVE_ENABLED=true` (optional, default true in production)
    - `INTERNAL_KEEPALIVE_INTERVAL_MINUTES=14` (optional)
    - `INTERNAL_KEEPALIVE_URL` (optional absolute URL; defaults to `/healthz` target)
@@ -129,21 +143,24 @@ Both return JSON status including bot readiness and TTS availability.
 - `@Nami your message`: Chat naturally by mentioning the bot in a server
 - `/search query:<text>`: Search the web and summarize results
 - `/preferences view|voice|search|language|reset`: Manage personal preferences
-- `/preferences model mode:<smart|uncensored>`: Smart mode uses OpenRouter, uncensored mode uses Venice
-- `/preferences voices`: List Cartesia voices
+- `/preferences model mode:<smart|uncensored>`: Smart mode uses OpenRouter, uncensored mode uses Ollama
+- `/preferences voices`: List Google TTS voices
 - `/game guess-start|guess-pick|trivia|scramble|rps|coinflip`: Play text games
 - `/voice join|leave|auto-read|autojoin|language`: Voice controls plus automatic VC speech options
-- `/tts say|stop|voices`: Speak text with Cartesia TTS
+- `/tts say|skip|clearqueue|stop|voices|info`: Speak text with Google TTS
 - `/admin feature|system-prompt|announce|clear-history|set-announcements|tts-language`: Server-level management
 
 ## Notes
 
 - Nami stores server settings, user preferences, and short chat history in Supabase when enabled, otherwise in `data/storage.json`.
-- Generated TTS files are created temporarily under `data/audio` and cleaned up after playback.
-- `/tts voices` shows Cartesia voice IDs.
+- Generated live playback files are created under `data/audio`, while Google TTS cache files persist under `data/audio_cache`.
+- `/tts voices` shows Google voice IDs.
 - Set your preferred voice with `/preferences voice voice_id:<id>`.
 - TTS speech language now defaults to server-level Hindi. Change it with `/voice language value:<language>` or `/admin tts-language value:<language>`.
+- The bot now tracks and enforces daily TTS limits (user, guild, global). Configure the limits via `TTS_DAILY_*` env vars.
+- Google Cloud quota reference (as of docs updated 2026-04-10): content is limited to 5,000 bytes per request, and default project request quota includes 1,000 requests/minute for standard/non-dedicated voices.
 - As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
+- Uncensored mode requires a reachable Ollama endpoint from the deployed environment. If you host Ollama yourself, confirm public or private-network routing from your bot host.
 - Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.
 

@@ -41,6 +41,21 @@ export interface AppConfig {
   discordToken: string;
   discordClientId: string;
   discordGuildId?: string;
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+  ollamaApiKey?: string;
+  ollamaTimeoutMs: number;
+  googleTtsApiKey?: string;
+  googleTtsSpeakingRate: number;
+  googleTtsPitch: number;
+  ttsMaxChars: number;
+  ttsCooldownSeconds: number;
+  ttsDailyUserRequestLimit?: number;
+  ttsDailyUserCharacterLimit?: number;
+  ttsDailyGuildRequestLimit?: number;
+  ttsDailyGuildCharacterLimit?: number;
+  ttsDailyGlobalRequestLimit?: number;
+  ttsDailyGlobalCharacterLimit?: number;
   cartesiaApiKey?: string;
   cartesiaVersion: string;
   cartesiaModel: string;
@@ -107,6 +122,34 @@ function envInt(name: string, defaultValue: number): number {
   return parsed;
 }
 
+function envFloat(name: string, defaultValue: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return defaultValue;
+  }
+
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed)) {
+    return defaultValue;
+  }
+
+  return parsed;
+}
+
+function envOptionalInt(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -132,6 +175,28 @@ export function loadConfig(): AppConfig {
     discordToken: requiredEnv("DISCORD_TOKEN"),
     discordClientId: requiredEnv("DISCORD_CLIENT_ID"),
     discordGuildId: process.env.DISCORD_GUILD_ID?.trim() || undefined,
+    ollamaBaseUrl:
+      process.env.OLLAMA_BASE_URL?.trim() ||
+      process.env.OLLAMA_URL?.trim() ||
+      "https://api.ollama.com",
+    ollamaModel: process.env.OLLAMA_MODEL?.trim() || "llama3.1:8b",
+    ollamaApiKey: process.env.OLLAMA_API_KEY?.trim() || undefined,
+    ollamaTimeoutMs: Math.max(5_000, Math.min(120_000, envInt("OLLAMA_TIMEOUT_MS", 30_000))),
+    googleTtsApiKey:
+      process.env.GOOGLE_TTS_KEY?.trim() ||
+      process.env.GOOGLE_TTS_API_KEY?.trim() ||
+      process.env.GOOGLE_API_KEY?.trim() ||
+      undefined,
+    googleTtsSpeakingRate: Math.max(0.25, Math.min(4, envFloat("GOOGLE_TTS_SPEAKING_RATE", 1))),
+    googleTtsPitch: Math.max(-20, Math.min(20, envFloat("GOOGLE_TTS_PITCH", 0))),
+    ttsMaxChars: Math.max(50, Math.min(1000, envInt("TTS_MAX_CHARS", 250))),
+    ttsCooldownSeconds: Math.max(0, Math.min(30, envInt("TTS_COOLDOWN_SECONDS", 2))),
+    ttsDailyUserRequestLimit: envOptionalInt("TTS_DAILY_USER_REQUEST_LIMIT") ?? 300,
+    ttsDailyUserCharacterLimit: envOptionalInt("TTS_DAILY_USER_CHARACTER_LIMIT") ?? 75_000,
+    ttsDailyGuildRequestLimit: envOptionalInt("TTS_DAILY_GUILD_REQUEST_LIMIT") ?? 3_000,
+    ttsDailyGuildCharacterLimit: envOptionalInt("TTS_DAILY_GUILD_CHARACTER_LIMIT") ?? 600_000,
+    ttsDailyGlobalRequestLimit: envOptionalInt("TTS_DAILY_GLOBAL_REQUEST_LIMIT") ?? 12_000,
+    ttsDailyGlobalCharacterLimit: envOptionalInt("TTS_DAILY_GLOBAL_CHARACTER_LIMIT") ?? 2_400_000,
     cartesiaApiKey: process.env.CARTESIA_API_KEY?.trim() || undefined,
     cartesiaVersion: process.env.CARTESIA_VERSION?.trim() || "2026-03-01",
     cartesiaModel: process.env.CARTESIA_MODEL?.trim() || "sonic-3",

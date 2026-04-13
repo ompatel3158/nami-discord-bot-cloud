@@ -8,6 +8,34 @@ import {
 } from "./config.js";
 import type { ConversationMessage, GuildSettings, UserPreferences } from "./types.js";
 
+export interface TtsLimitCheckInput {
+  guildId: string;
+  userId: string;
+  characters: number;
+  userRequestLimit?: number;
+  userCharacterLimit?: number;
+  guildRequestLimit?: number;
+  guildCharacterLimit?: number;
+  globalRequestLimit?: number;
+  globalCharacterLimit?: number;
+}
+
+export interface TtsLimitUsageSnapshot {
+  requestCount: number;
+  characterCount: number;
+  requestLimit?: number;
+  characterLimit?: number;
+}
+
+export interface TtsLimitCheckResult {
+  allowed: boolean;
+  reason?: string;
+  usageDate: string;
+  user: TtsLimitUsageSnapshot;
+  guild: TtsLimitUsageSnapshot;
+  global: TtsLimitUsageSnapshot;
+}
+
 export interface StorageProvider {
   getGuildSettings(guildId: string): GuildSettings | Promise<GuildSettings>;
   saveGuildSettings(guildId: string, settings: GuildSettings): GuildSettings | Promise<GuildSettings>;
@@ -31,19 +59,28 @@ export interface StorageProvider {
     limit?: number
   ): ConversationMessage[] | Promise<ConversationMessage[]>;
   clearConversation(guildId: string, userId?: string): number | Promise<number>;
+  trackTtsUsageAndCheckLimit(input: TtsLimitCheckInput): TtsLimitCheckResult | Promise<TtsLimitCheckResult>;
+}
+
+interface TtsUsageCounter {
+  requestCount: number;
+  characterCount: number;
+  updatedAt: string;
 }
 
 interface StorageShape {
   guilds: Record<string, GuildSettings>;
   users: Record<string, UserPreferences>;
   conversations: Record<string, ConversationMessage[]>;
+  ttsUsageDaily: Record<string, TtsUsageCounter>;
 }
 
 const STORAGE_FILE = path.join(DATA_DIR, "storage.json");
 const EMPTY_STORAGE: StorageShape = {
   guilds: {},
   users: {},
-  conversations: {}
+  conversations: {},
+  ttsUsageDaily: {}
 };
 
 function deepClone<T>(value: T): T {
@@ -63,7 +100,13 @@ export class AppStorage {
   private read(): StorageShape {
     try {
       const raw = fs.readFileSync(STORAGE_FILE, "utf8");
-      return JSON.parse(raw) as StorageShape;
+      const parsed = JSON.parse(raw) as Partial<StorageShape>;
+      return {
+        guilds: parsed.guilds ?? {},
+        users: parsed.users ?? {},
+        conversations: parsed.conversations ?? {},
+        ttsUsageDaily: parsed.ttsUsageDaily ?? {}
+      };
     } catch (error) {
       console.error("Storage file was unreadable; resetting to a clean store.", error);
 
@@ -76,7 +119,7 @@ export class AppStorage {
       }
 
       this.write(EMPTY_STORAGE);
-      return { ...EMPTY_STORAGE };
+      return deepClone(EMPTY_STORAGE);
     }
   }
 
@@ -176,5 +219,131 @@ export class AppStorage {
 
     this.write(store);
     return cleared;
+  }
+
+  trackTtsUsageAndCheckLimit(input: TtsLimitCheckInput): TtsLimitCheckResult {
+    const store = this.read();
+    const usageDate = new Date().toISOString().slice(0, 10);
+    const billableCharacters = Math.max(0, Math.floor(input.characters));
+
+    const userKey = this.usageCounterKey(usageDate, "user", input.userId);
+    const guildKey = this.usageCounterKey(usageDate, "guild", input.guildId);
+    const globalKey = this.usageCounterKey(usageDate, "global", "global");
+
+    const userCurrent = this.readUsageCounter(store, userKey);
+    const guildCurrent = this.readUsageCounter(store, guildKey);
+    const globalCurrent = this.readUsageCounter(store, globalKey);
+
+    const userNextRequests = userCurrent.requestCount + 1;
+    const userNextCharacters = userCurrent.characterCount + billableCharacters;
+    const guildNextRequests = guildCurrent.requestCount + 1;
+    const guildNextCharacters = guildCurrent.characterCount + billableCharacters;
+    const globalNextRequests = globalCurrent.requestCount + 1;
+    const globalNextCharacters = globalCurrent.characterCount + billableCharacters;
+
+    const reason =
+      this.resolveExceededReason(userNextRequests, input.userRequestLimit, "Daily user request") ||
+      this.resolveExceededReason(userNextCharacters, input.userCharacterLimit, "Daily user character") ||
+      this.resolveExceededReason(guildNextRequests, input.guildRequestLimit, "Daily guild request") ||
+      this.resolveExceededReason(guildNextCharacters, input.guildCharacterLimit, "Daily guild character") ||
+      this.resolveExceededReason(globalNextRequests, input.globalRequestLimit, "Daily global request") ||
+      this.resolveExceededReason(globalNextCharacters, input.globalCharacterLimit, "Daily global character");
+
+    if (reason) {
+      return {
+        allowed: false,
+        reason,
+        usageDate,
+        user: {
+          requestCount: userCurrent.requestCount,
+          characterCount: userCurrent.characterCount,
+          requestLimit: input.userRequestLimit,
+          characterLimit: input.userCharacterLimit
+        },
+        guild: {
+          requestCount: guildCurrent.requestCount,
+          characterCount: guildCurrent.characterCount,
+          requestLimit: input.guildRequestLimit,
+          characterLimit: input.guildCharacterLimit
+        },
+        global: {
+          requestCount: globalCurrent.requestCount,
+          characterCount: globalCurrent.characterCount,
+          requestLimit: input.globalRequestLimit,
+          characterLimit: input.globalCharacterLimit
+        }
+      };
+    }
+
+    const updatedAt = new Date().toISOString();
+    store.ttsUsageDaily[userKey] = {
+      requestCount: userNextRequests,
+      characterCount: userNextCharacters,
+      updatedAt
+    };
+    store.ttsUsageDaily[guildKey] = {
+      requestCount: guildNextRequests,
+      characterCount: guildNextCharacters,
+      updatedAt
+    };
+    store.ttsUsageDaily[globalKey] = {
+      requestCount: globalNextRequests,
+      characterCount: globalNextCharacters,
+      updatedAt
+    };
+
+    this.write(store);
+
+    return {
+      allowed: true,
+      usageDate,
+      user: {
+        requestCount: userNextRequests,
+        characterCount: userNextCharacters,
+        requestLimit: input.userRequestLimit,
+        characterLimit: input.userCharacterLimit
+      },
+      guild: {
+        requestCount: guildNextRequests,
+        characterCount: guildNextCharacters,
+        requestLimit: input.guildRequestLimit,
+        characterLimit: input.guildCharacterLimit
+      },
+      global: {
+        requestCount: globalNextRequests,
+        characterCount: globalNextCharacters,
+        requestLimit: input.globalRequestLimit,
+        characterLimit: input.globalCharacterLimit
+      }
+    };
+  }
+
+  private usageCounterKey(usageDate: string, scope: "user" | "guild" | "global", scopeId: string): string {
+    return `${usageDate}:${scope}:${scopeId}`;
+  }
+
+  private readUsageCounter(store: StorageShape, key: string): TtsUsageCounter {
+    const existing = store.ttsUsageDaily[key];
+    if (existing) {
+      return existing;
+    }
+
+    return {
+      requestCount: 0,
+      characterCount: 0,
+      updatedAt: new Date(0).toISOString()
+    };
+  }
+
+  private resolveExceededReason(value: number, limit: number | undefined, label: string): string | undefined {
+    if (!limit) {
+      return undefined;
+    }
+
+    if (value <= limit) {
+      return undefined;
+    }
+
+    return `${label} limit reached (${limit}).`;
   }
 }

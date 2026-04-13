@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import ffmpegPath from "ffmpeg-static";
 import {
@@ -110,6 +111,30 @@ export class VoiceService {
     await this.finishCurrent(guildId);
   }
 
+  async skip(guildId: string): Promise<boolean> {
+    const session = this.sessions.get(guildId);
+    if (!session || !session.busy) {
+      return false;
+    }
+
+    session.player.stop(true);
+    return true;
+  }
+
+  getQueueLength(guildId: string): number {
+    const session = this.sessions.get(guildId);
+    if (!session) {
+      return 0;
+    }
+
+    return session.queue.length;
+  }
+
+  isPlaying(guildId: string): boolean {
+    const session = this.sessions.get(guildId);
+    return Boolean(session?.busy);
+  }
+
   async leave(guildId: string): Promise<void> {
     const session = this.sessions.get(guildId);
     if (!session) {
@@ -212,7 +237,9 @@ export class VoiceService {
 
     if (session.activeFilePath) {
       try {
-        await fs.unlink(session.activeFilePath);
+        if (this.shouldDeletePlaybackFile(session.activeFilePath)) {
+          await fs.unlink(session.activeFilePath);
+        }
       } catch {
         // Best-effort cleanup for generated audio files.
       }
@@ -237,5 +264,11 @@ export class VoiceService {
 
     filters.push(`atempo=${remaining.toFixed(2)}`);
     return filters.join(",");
+  }
+
+  private shouldDeletePlaybackFile(filePath: string): boolean {
+    const normalized = path.normalize(filePath).toLowerCase();
+    const audioCacheToken = `${path.sep}audio_cache${path.sep}`;
+    return !normalized.includes(audioCacheToken);
   }
 }
