@@ -26,6 +26,7 @@ interface SpeechOptions {
   text: string;
   voiceId: TtsVoice;
   language: string;
+  fallbackLanguage?: string;
   speed: number;
   userId: string;
   speakerName?: string;
@@ -652,7 +653,7 @@ export class AiService {
       throw new Error("Text is empty after preprocessing.");
     }
 
-    const languageCode = this.resolveLanguageCode(options.language, cleanText);
+    const languageCode = this.resolveLanguageCode(options.language, options.fallbackLanguage);
     const messagePath = await this.synthesizeMessage(cleanText, languageCode, options.voiceId, options.userId);
 
     if (!options.includeSpeakerPrefix || !options.speakerName?.trim()) {
@@ -1093,37 +1094,39 @@ export class AiService {
     return `${normalizedWhitespace.slice(0, this.config.ttsMaxChars)}...`;
   }
 
-  private resolveLanguageCode(languageHint: string | undefined, cleanedText: string): string {
+  private resolveLanguageCode(languageHint: string | undefined, fallbackLanguageHint?: string): string {
+    return (
+      this.normalizeLanguageCode(languageHint) ??
+      this.normalizeLanguageCode(fallbackLanguageHint) ??
+      "hi-IN"
+    );
+  }
+
+  private normalizeLanguageCode(languageHint: string | undefined): string | undefined {
     const normalizedHint = (languageHint ?? "").trim().toLowerCase();
-    if (normalizedHint) {
-      const mapped = LANGUAGE_ALIAS_MAP[normalizedHint];
-      if (mapped) {
-        return mapped;
-      }
+    if (!normalizedHint || normalizedHint === "auto") {
+      return undefined;
+    }
 
-      const short = normalizedHint.match(/^[a-z]{2}(?=-|_|$)/)?.[0];
-      if (short) {
-        const fromShort = LANGUAGE_ALIAS_MAP[short];
-        if (fromShort) {
-          return fromShort;
-        }
-      }
+    const mapped = LANGUAGE_ALIAS_MAP[normalizedHint];
+    if (mapped) {
+      return mapped;
+    }
 
-      if (/^[a-z]{2}-[a-z]{2}$/i.test(normalizedHint)) {
-        const [language, region] = normalizedHint.split("-");
-        return `${language.toLowerCase()}-${region.toUpperCase()}`;
+    const short = normalizedHint.match(/^[a-z]{2}(?=-|_|$)/)?.[0];
+    if (short) {
+      const fromShort = LANGUAGE_ALIAS_MAP[short];
+      if (fromShort) {
+        return fromShort;
       }
     }
 
-    if (/[\u0A80-\u0AFF]/.test(cleanedText)) {
-      return "gu-IN";
+    if (/^[a-z]{2}-[a-z]{2}$/i.test(normalizedHint)) {
+      const [language, region] = normalizedHint.split("-");
+      return `${language.toLowerCase()}-${region.toUpperCase()}`;
     }
 
-    if (/[\u0900-\u097F]/.test(cleanedText)) {
-      return "hi-IN";
-    }
-
-    return "hi-IN";
+    return undefined;
   }
 
   private resolveLanguageOption(languageHint: string | undefined): string | undefined {

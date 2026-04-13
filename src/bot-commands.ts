@@ -114,7 +114,6 @@ export function createCommands(): BotCommand[] {
         .addNumberOption((option) => option.setName("speed").setDescription("Playback speed from 0.7 to 1.2").setRequired(false)))
       .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("Show voices and how to set one quickly.")
         .addStringOption((option) => option.setName("language").setDescription("Filter voices by language").setRequired(false).addChoices(
-          { name: "Auto", value: "auto" },
           { name: "Hindi", value: "hi" },
           { name: "Gujarati", value: "gu" },
           { name: "English", value: "en" }
@@ -296,7 +295,7 @@ export function createCommands(): BotCommand[] {
           current.autoVoiceReadEnabled = enabled;
           return current;
         });
-        await respond(interaction, `Auto-read is now **${enabled ? "enabled" : "disabled"}** for this server. Language: **${settings.ttsLanguage}**.`);
+        await respond(interaction, `Auto-read is now **${enabled ? "enabled" : "disabled"}** for this server. Default language: **${settings.ttsLanguage}**.`);
         return;
       }
       if (subcommand === "language") {
@@ -310,7 +309,7 @@ export function createCommands(): BotCommand[] {
         });
         await respond(
           interaction,
-          `Server TTS language is now **${settings.ttsLanguage}**. This affects both /tts say and voice auto-read.`,
+          `Server TTS language default is now **${settings.ttsLanguage}**. User language preference can override this per user.`,
           { ephemeral: true }
         );
         return;
@@ -358,7 +357,7 @@ export function createCommands(): BotCommand[] {
           "Auto-join settings updated.",
           `Enabled: **${settings.autoVoiceJoinEnabled ? "yes" : "no"}**`,
           `Auto-read: **${settings.autoVoiceReadEnabled ? "yes" : "no"}**`,
-          `TTS language: **${settings.ttsLanguage}**`,
+          `Default TTS language: **${settings.ttsLanguage}**`,
           `Included VCs: ${includeList}`,
           `Excluded VCs: ${excludeList}`
         ].join("\n"));
@@ -382,7 +381,6 @@ export function createCommands(): BotCommand[] {
       .addSubcommand((subcommand) => subcommand.setName("info").setDescription("Show TTS queue and runtime status."))
       .addSubcommand((subcommand) => subcommand.setName("voices").setDescription("List available Google TTS voices.")
         .addStringOption((option) => option.setName("language").setDescription("Filter voices by language").setRequired(false).addChoices(
-          { name: "Auto", value: "auto" },
           { name: "Hindi", value: "hi" },
           { name: "Gujarati", value: "gu" },
           { name: "English", value: "en" }
@@ -448,6 +446,10 @@ export function createCommands(): BotCommand[] {
       const text = interaction.options.getString("text", true);
       const voiceId = interaction.options.getString("voice_id") ?? preferences.voice;
       const speed = clamp(interaction.options.getNumber("speed") ?? preferences.ttsSpeed, 0.7, 1.2);
+      const preferredLanguage = preferences.language?.trim();
+      const effectiveLanguage = preferredLanguage && preferredLanguage.toLowerCase() !== "auto"
+        ? preferredLanguage
+        : guildSettings.ttsLanguage;
       const cooldownRemaining = context.ai.getTtsCooldownRemainingSeconds(interaction.user.id);
 
       if (cooldownRemaining > 0) {
@@ -490,7 +492,8 @@ export function createCommands(): BotCommand[] {
       const filePath = await context.ai.synthesizeSpeech({
         text,
         voiceId,
-        language: guildSettings.ttsLanguage,
+        language: preferredLanguage,
+        fallbackLanguage: guildSettings.ttsLanguage,
         speed,
         userId: interaction.user.id,
         speakerName,
@@ -499,7 +502,7 @@ export function createCommands(): BotCommand[] {
       const queueDepth = await context.voicePlayer.enqueue(member, filePath, speed);
       lastTtsSpeakerByGuild.set(guildId, interaction.user.id);
       const queueMessage = queueDepth > 1 ? `Queued. There are **${queueDepth - 1}** item(s) ahead of this one.` : "Playing now.";
-      await respond(interaction, `${queueMessage}\nGoogle voice: **${voiceId || "default"}**\nLanguage: **${guildSettings.ttsLanguage}**\nSpeed: **${speed}x**.`);
+      await respond(interaction, `${queueMessage}\nGoogle voice: **${voiceId || "default"}**\nLanguage: **${effectiveLanguage}**\nSpeed: **${speed}x**.`);
     }
   };
 
@@ -554,7 +557,7 @@ export function createCommands(): BotCommand[] {
           current.ttsLanguage = value;
           return current;
         });
-        await respond(interaction, `Server TTS language set to **${value}** for /tts say and auto-read.`);
+        await respond(interaction, `Server TTS language default set to **${value}**. Users can override using /preferences language.`);
         return;
       }
       if (subcommand === "announce") {
@@ -580,7 +583,7 @@ export function createCommands(): BotCommand[] {
         "`@Nami <message>` - chat naturally by mentioning the bot in a server",
         "`/search query:<text>` - web search summary with source links",
         "`/preferences ...` - your voice IDs, speed, model mode, language, and default search",
-        "`/voice language value:<language>` - set server TTS/auto-read language (Manage Server required)",
+        "`/voice language value:<language>` - set server default TTS language (Manage Server required)",
         "`/memory view`, `/memory clear` - see or clear remembered conversation",
         "`/voice auto-read`, `/voice autojoin` - automatic VC speech behavior",
         "`/tts voices` - list available Google TTS voices",

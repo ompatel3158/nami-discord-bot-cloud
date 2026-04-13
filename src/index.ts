@@ -287,7 +287,8 @@ client.on(Events.MessageCreate, async (message) => {
               const filePath = await context.ai.synthesizeSpeech({
                 text: spokenContent,
                 voiceId: preferences.voice,
-                language: settings.ttsLanguage,
+                language: preferences.language,
+                fallbackLanguage: settings.ttsLanguage,
                 speed: preferences.ttsSpeed,
                 userId: message.author.id,
                 speakerName,

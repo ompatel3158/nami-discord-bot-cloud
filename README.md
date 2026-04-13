@@ -12,7 +12,7 @@ It supports:
 - Storage backed by local JSON or Supabase
 - Per-user preferences for Google voice ID, speed, language, and AI reply style
 - Per-user model mode switch (smart vs uncensored)
-- Server-level TTS language for both `/tts say` and auto voice read
+- Server default TTS language with per-user preference override for `/tts say` and auto voice read
 - Optional auto voice reading in VC with auto-join include/exclude controls
 - Admin controls for feature flags, prompts, announcements, and history cleanup
 
@@ -168,7 +168,7 @@ Both return JSON status including bot readiness and TTS availability.
 - Without `SUPABASE_TTS_BUCKET`, Google TTS cache files persist under `data/audio_cache`.
 - `/tts voices` shows Google voice IDs.
 - Set your preferred voice with `/preferences voice voice_id:<id>`.
-- TTS speech language now defaults to server-level Hindi. Change it with `/voice language value:<language>` or `/admin tts-language value:<language>`.
+- TTS speech language now uses user preference first (`/preferences language`) and falls back to server default (`/voice language` or `/admin tts-language`). Auto language detection is disabled.
 - The bot now tracks and enforces daily TTS limits (user, guild, global). Configure the limits via `TTS_DAILY_*` env vars.
 - Google Cloud quota reference (as of docs updated 2026-04-10): content is limited to 5,000 bytes per request, and default project request quota includes 1,000 requests/minute for standard/non-dedicated voices.
 - As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
