@@ -54,6 +54,8 @@ interface GoogleVoiceChoice {
   ssmlGender: "MALE" | "FEMALE" | "NEUTRAL";
 }
 
+type TtsEmotionStyle = "neutral" | "excited" | "question" | "sad" | "calm";
+
 type InstantTopic = { Text?: string; FirstURL?: string };
 type TopicGroup = { Topics?: InstantTopic[] };
 
@@ -812,12 +814,13 @@ export class AiService {
     }
 
     const candidates = this.buildVoiceCandidates(languageCode, dynamicVoiceNames, requestedVoiceId);
+    const emotionStyle = this.detectEmotionStyle(text);
 
     let lastError = "no voice produced audio";
     let synthesizedBytes: Buffer | null = null;
     for (const candidate of candidates) {
       try {
-        const audioBytes = await this.callGoogleTtsApi(text, candidate);
+        const audioBytes = await this.callGoogleTtsApi(text, candidate, emotionStyle);
         if (!audioBytes?.length) {
           continue;
         }
@@ -890,13 +893,19 @@ export class AiService {
     return match?.[0];
   }
 
-  private async callGoogleTtsApi(text: string, voice: GoogleVoiceChoice): Promise<Buffer | null> {
+  private async callGoogleTtsApi(
+    text: string,
+    voice: GoogleVoiceChoice,
+    emotionStyle: TtsEmotionStyle = "neutral"
+  ): Promise<Buffer | null> {
     if (!this.config.googleTtsApiKey) {
       return null;
     }
 
+    const ssml = this.buildExpressiveSsml(text, emotionStyle);
+
     const payload = {
-      input: { text },
+      input: { ssml },
       voice: {
         languageCode: voice.languageCode,
         name: voice.name,
@@ -931,6 +940,76 @@ export class AiService {
 
     this.ttsRequestCountThisSession += 1;
     return Buffer.from(json.audioContent, "base64");
+  }
+
+  private detectEmotionStyle(text: string): TtsEmotionStyle {
+    const trimmed = text.trim();
+    const lowered = trimmed.toLowerCase();
+
+    const hasExcitedWords = /(wow|awesome|amazing|great|fantastic|lets go|let's go|omg|haha|yay|love this)/i.test(lowered);
+    const hasSadWords = /(sad|sorry|miss you|hurt|upset|tired|cry|depressed|bad news)/i.test(lowered);
+    const exclamationCount = (trimmed.match(/!/g) ?? []).length;
+
+    if (hasExcitedWords || exclamationCount >= 2) {
+      return "excited";
+    }
+
+    if (hasSadWords || /\.\.\./.test(trimmed)) {
+      return "sad";
+    }
+
+    if (/\?$/.test(trimmed) || (trimmed.includes("?") && exclamationCount === 0)) {
+      return "question";
+    }
+
+    if (/(calm|relax|slowly|gently|peaceful|softly)/i.test(lowered)) {
+      return "calm";
+    }
+
+    return "neutral";
+  }
+
+  private buildExpressiveSsml(text: string, style: TtsEmotionStyle): string {
+    const escaped = this.escapeForSsml(text);
+    const withBreaks = escaped
+      .replace(/,\s+/g, ", <break time=\"120ms\"/> ")
+      .replace(/([.!?])\s+/g, "$1 <break time=\"220ms\"/> ");
+
+    const highlighted = style === "excited"
+      ? withBreaks.replace(/\b(very|really|so|wow|amazing|awesome)\b/gi, "<emphasis level=\"strong\">$1</emphasis>")
+      : withBreaks;
+
+    const prosody = this.getProsodyForStyle(style);
+    return `<speak><prosody rate="${prosody.rate}" pitch="${prosody.pitch}" volume="${prosody.volume}">${highlighted}</prosody></speak>`;
+  }
+
+  private getProsodyForStyle(style: TtsEmotionStyle): { rate: string; pitch: string; volume: string } {
+    if (style === "excited") {
+      return { rate: "+8%", pitch: "+3st", volume: "+2dB" };
+    }
+
+    if (style === "question") {
+      return { rate: "+2%", pitch: "+2st", volume: "+0dB" };
+    }
+
+    if (style === "sad") {
+      return { rate: "-8%", pitch: "-2st", volume: "-1dB" };
+    }
+
+    if (style === "calm") {
+      return { rate: "-4%", pitch: "-1st", volume: "-1dB" };
+    }
+
+    return { rate: "+0%", pitch: "+0st", volume: "+0dB" };
+  }
+
+  private escapeForSsml(text: string): string {
+    return text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
   }
 
   private async synthesizePrefix(displayName: string, languageCode: string): Promise<string> {

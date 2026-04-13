@@ -9,6 +9,7 @@ It supports:
 - Web search summaries using DuckDuckGo search results plus AI summarization
 - Text games like guessing, trivia, scramble, rock-paper-scissors, and coinflip
 - Text-to-speech in voice channels with Google Cloud Text-to-Speech
+- Expressive SSML prosody for TTS (tone-aware pitch/rate/pauses)
 - Storage backed by local JSON or Supabase
 - Per-user preferences for Google voice ID, speed, language, and AI reply style
 - Per-user model mode switch (smart vs uncensored)
@@ -169,6 +170,7 @@ Both return JSON status including bot readiness and TTS availability.
 - `/tts voices` shows Google voice IDs.
 - Set your preferred voice with `/preferences voice voice_id:<id>`.
 - TTS speech language now uses user preference first (`/preferences language`) and falls back to server default (`/voice language` or `/admin tts-language`). Auto language detection is disabled.
+- TTS uses expressive SSML prosody so punctuation and tone words sound more natural (for example excited lines vs questions).
 - The bot now tracks and enforces daily TTS limits (user, guild, global). Configure the limits via `TTS_DAILY_*` env vars.
 - Google Cloud quota reference (as of docs updated 2026-04-10): content is limited to 5,000 bytes per request, and default project request quota includes 1,000 requests/minute for standard/non-dedicated voices.
 - As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
