@@ -650,7 +650,8 @@ export class AiService {
 
     await this.ensureTtsDirectories();
 
-    const cleanText = this.preprocessText(options.text);
+    const messageWithoutMetadata = this.cleanDiscordMetadata(options.text);
+    const cleanText = this.preprocessText(messageWithoutMetadata);
     if (!cleanText) {
       throw new Error("Text is empty after preprocessing.");
     }
@@ -947,6 +948,11 @@ export class AiService {
     const trimmed = text.trim();
     const lowered = trimmed.toLowerCase();
 
+    const isAllCaps = /[A-Z]/.test(trimmed) && trimmed === trimmed.toUpperCase() && trimmed.length > 3;
+    if (isAllCaps) {
+      return "excited";
+    }
+
     const hasExcitedWords = /(wow|awesome|amazing|great|fantastic|lets go|let's go|omg|haha|yay|love this)/i.test(lowered);
     const hasSadWords = /(sad|sorry|miss you|hurt|upset|tired|cry|depressed|bad news)/i.test(lowered);
     const exclamationCount = (trimmed.match(/!/g) ?? []).length;
@@ -1174,6 +1180,12 @@ export class AiService {
     return `${normalizedWhitespace.slice(0, this.config.ttsMaxChars)}...`;
   }
 
+  private cleanDiscordMetadata(text: string): string {
+    const metadataPrefixPattern =
+      /^\s*.*?\s+[—-]\s+(?:(?:Yesterday|Today)\s+at\s+\d{1,2}:\d{2}\s*(?:AM|PM)|\d{1,2}\/\d{1,2}\/\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM))\s*/gim;
+    return text.replace(metadataPrefixPattern, "").trim();
+  }
+
   private smartTextCleaner(text: string, languageCode: string): string {
     let cleaned = text;
 
@@ -1181,9 +1193,17 @@ export class AiService {
       const replacements: Array<[RegExp, string]> = [
         [/\bh\b/gi, "he"],
         [/\blya\b/gi, "lyaa"],
+        [/\bhove\b/gi, "hovey"],
+        [/\bhave\b/gi, "hav-ey"],
+        [/\btame\b/gi, "tum-ey"],
         [/\btuh\b/gi, "too"],
+        [/\btoh\b/gi, "toh..."],
+        [/\bhaan\b/gi, "haaan"],
+        [/\btari\b/gi, "tariii"],
+        [/\bbaar\b/gi, "baahr"],
         [/\bsu\b/gi, "soo"],
         [/\bne\b/gi, "ney"],
+        [/\bpahela\b/gi, "peh-la"],
         [/\bgyu\b/gi, "gyoo"],
         [/\bchhi\b/gi, "Chhee!"],
         [/\bna\b/gi, "naa"]
@@ -1196,7 +1216,7 @@ export class AiService {
       cleaned = cleaned.replace(/(?:ha|ah){2,}/gi, " Ha! Ha! Ha! ");
 
       const isUppercase = /[A-Z]/.test(cleaned) && cleaned === cleaned.toUpperCase();
-      if (isUppercase) {
+      if (isUppercase && cleaned.length > 3) {
         const lower = cleaned.toLowerCase();
         cleaned = `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
         if (!/[.!?]$/.test(cleaned)) {
