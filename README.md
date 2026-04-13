@@ -172,6 +172,7 @@ Both return JSON status including bot readiness and TTS availability.
 - TTS speech language now uses user preference first (`/preferences language`) and falls back to server default (`/voice language` or `/admin tts-language`). Auto language detection is disabled.
 - TTS uses expressive SSML prosody so punctuation and tone words sound more natural (for example excited lines vs questions).
 - TTS now includes a smart text cleaner for `hi-IN`/`gu-IN` that expands common slang spellings (for example `h` -> `he`, `su` -> `soo`) and inserts natural pauses for names like `bhai`.
+- The slang cleaner also covers more Gujlish chat words like `kem`, `cho`, `majama`, `nathi`, `karyu`, `aavu`, and `javu` for more natural pronunciation.
 - TTS also strips copied Discord metadata prefixes like `Name — Yesterday at 11:28 PM` before synthesis.
 - TTS now speaks common emojis as words (for example `😂` -> "ha ha ha", `❤️` -> "love") and normalizes `haha`/`hahahaha` into clearer laughter delivery.
 - The bot now tracks and enforces daily TTS limits (user, guild, global). Configure the limits via `TTS_DAILY_*` env vars.
