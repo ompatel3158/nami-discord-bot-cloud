@@ -1263,9 +1263,9 @@ export class AiService {
         [/\bjavu\b/gi, "jaa-voo"],
         [/\bgyu\b/gi, "gyoo"],
         [/\bchhi\b/gi, "Chhee!"],
-        [/\bna\b/gi, "naa"]
+        [/\bna\b/gi, "naa"],
+        [/\bbrbr\b/gi, "barabar"]
       ];
-
       for (const [pattern, replacement] of replacements) {
         cleaned = cleaned.replace(pattern, replacement);
       }
