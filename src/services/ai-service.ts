@@ -125,6 +125,31 @@ const LANGUAGE_ALIAS_MAP: Record<string, string> = {
   english: "en-US"
 };
 
+const EMOJI_SPEECH_MAP: Record<string, string> = {
+  "😂": "ha ha ha",
+  "🤣": "ha ha ha",
+  "😅": "hehe",
+  "😆": "haha",
+  "😁": "big smile",
+  "😄": "smile",
+  "😀": "smile",
+  "🙂": "smile",
+  "😊": "smile",
+  "😭": "crying",
+  "😢": "sad",
+  "😡": "angry",
+  "❤️": "love",
+  "❤": "love",
+  "🔥": "fire",
+  "👍": "thumbs up",
+  "🙏": "thank you",
+  "👏": "clap",
+  "🤔": "hmm",
+  "😎": "cool",
+  "😍": "in love",
+  "🤗": "hug"
+};
+
 export class AiService {
   private readonly config: AppConfig;
   private readonly ttsCacheDir = path.join(DATA_DIR, "audio_cache");
@@ -1169,7 +1194,8 @@ export class AiService {
 
   private preprocessText(input: string): string {
     const mentionsStripped = input.replace(/<@[!&]?\d+>|<#\d+>|<@&\d+>/g, " ");
-    const emojiStripped = mentionsStripped.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]+/gu, " ");
+    const emojiExpanded = this.replaceEmojiWithSpeech(mentionsStripped);
+    const emojiStripped = emojiExpanded.replace(/[\p{Extended_Pictographic}\u{2600}-\u{27BF}]+/gu, " ");
     const repeatedCollapsed = emojiStripped.replace(/(.)\1{2,}/g, "$1$1");
     const normalizedWhitespace = repeatedCollapsed.replace(/\s+/g, " ").trim();
 
@@ -1186,11 +1212,23 @@ export class AiService {
     return text.replace(metadataPrefixPattern, "").trim();
   }
 
+  private replaceEmojiWithSpeech(text: string): string {
+    let expanded = text;
+    for (const [emoji, spoken] of Object.entries(EMOJI_SPEECH_MAP)) {
+      expanded = expanded.split(emoji).join(` ${spoken} `);
+    }
+    return expanded;
+  }
+
   private smartTextCleaner(text: string, languageCode: string): string {
     let cleaned = text;
 
+    cleaned = cleaned.replace(/\b(?:ha\s*){2,}\b/gi, " Ha! Ha! Ha! ");
+    cleaned = cleaned.replace(/\b(?:ah\s*){2,}\b/gi, " Ha! Ha! Ha! ");
+
     if (languageCode === "hi-IN" || languageCode === "gu-IN") {
       const replacements: Array<[RegExp, string]> = [
+        [/\baa\b/gi, "aaa"],
         [/\bh\b/gi, "he"],
         [/\blya\b/gi, "lyaa"],
         [/\bhove\b/gi, "hovey"],
@@ -1212,8 +1250,6 @@ export class AiService {
       for (const [pattern, replacement] of replacements) {
         cleaned = cleaned.replace(pattern, replacement);
       }
-
-      cleaned = cleaned.replace(/(?:ha|ah){2,}/gi, " Ha! Ha! Ha! ");
 
       const isUppercase = /[A-Z]/.test(cleaned) && cleaned === cleaned.toUpperCase();
       if (isUppercase && cleaned.length > 3) {

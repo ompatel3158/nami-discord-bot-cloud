@@ -173,6 +173,7 @@ Both return JSON status including bot readiness and TTS availability.
 - TTS uses expressive SSML prosody so punctuation and tone words sound more natural (for example excited lines vs questions).
 - TTS now includes a smart text cleaner for `hi-IN`/`gu-IN` that expands common slang spellings (for example `h` -> `he`, `su` -> `soo`) and inserts natural pauses for names like `bhai`.
 - TTS also strips copied Discord metadata prefixes like `Name — Yesterday at 11:28 PM` before synthesis.
+- TTS now speaks common emojis as words (for example `😂` -> "ha ha ha", `❤️` -> "love") and normalizes `haha`/`hahahaha` into clearer laughter delivery.
 - The bot now tracks and enforces daily TTS limits (user, guild, global). Configure the limits via `TTS_DAILY_*` env vars.
 - Google Cloud quota reference (as of docs updated 2026-04-10): content is limited to 5,000 bytes per request, and default project request quota includes 1,000 requests/minute for standard/non-dedicated voices.
 - As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
