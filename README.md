@@ -52,8 +52,9 @@ DISCORD_CLIENT_ID=your_discord_application_id
 DISCORD_GUILD_ID=optional_guild_id_for_fast_dev_command_registration
 OPENROUTER_API_KEY=your_openrouter_api_key
 OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
-OLLAMA_BASE_URL=https://api.ollama.com
+OLLAMA_BASE_URL=https://ollama.com
 OLLAMA_MODEL=llama3.1:8b
+OLLAMA_FALLBACK_MODELS=gpt-oss:120b,gpt-oss:120b-cloud
 OLLAMA_API_KEY=optional_ollama_api_key
 OLLAMA_TIMEOUT_MS=30000
 GOOGLE_TTS_KEY=your_google_cloud_api_key
@@ -86,7 +87,9 @@ Set `SUPABASE_TTS_BUCKET` to enable Supabase Storage-backed TTS cache objects (`
 
 Daily TTS limit tracking is persisted in Supabase when `USE_SUPABASE_STORAGE=true` and enforced atomically to remain safe under parallel requests.
 
-`OLLAMA_BASE_URL` and `OLLAMA_MODEL` are required for uncensored mode. Set `OLLAMA_API_KEY` when your hosted Ollama endpoint requires bearer auth.
+`OLLAMA_BASE_URL` and `OLLAMA_MODEL` are required for uncensored mode. Use `http://localhost:11434` (or `http://localhost:11434/api`) for local Ollama, and `https://ollama.com` for Cloud API. Set `OLLAMA_API_KEY` for protected/cloud endpoints.
+
+Set `OLLAMA_FALLBACK_MODELS` as a comma-separated list to retry alternate models when the primary model returns "not found".
 
 Internal keepalive cron is production-enabled by default and runs every 14 minutes. Override with `INTERNAL_KEEPALIVE_ENABLED`, `INTERNAL_KEEPALIVE_INTERVAL_MINUTES`, and optional `INTERNAL_KEEPALIVE_URL`.
 
@@ -121,6 +124,7 @@ If your local IP is rate-limited or blocked by provider anti-abuse checks, deplo
    - `OPENROUTER_MODEL`
    - `OLLAMA_BASE_URL` (required for uncensored mode)
    - `OLLAMA_MODEL` (required for uncensored mode)
+   - `OLLAMA_FALLBACK_MODELS` (optional comma-separated model retries)
    - `OLLAMA_API_KEY` (optional, required for protected endpoints)
    - `OLLAMA_TIMEOUT_MS` (optional)
    - `GOOGLE_TTS_KEY`
@@ -168,7 +172,7 @@ Both return JSON status including bot readiness and TTS availability.
 - The bot now tracks and enforces daily TTS limits (user, guild, global). Configure the limits via `TTS_DAILY_*` env vars.
 - Google Cloud quota reference (as of docs updated 2026-04-10): content is limited to 5,000 bytes per request, and default project request quota includes 1,000 requests/minute for standard/non-dedicated voices.
 - As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
-- Uncensored mode requires a reachable Ollama endpoint from the deployed environment. If you host Ollama yourself, confirm public or private-network routing from your bot host.
+- Uncensored mode requires a reachable Ollama endpoint from the deployed environment. For cloud calls, use `OLLAMA_BASE_URL=https://ollama.com`; for local daemon use `OLLAMA_BASE_URL=http://localhost:11434`.
 - Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.
 

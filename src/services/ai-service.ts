@@ -56,7 +56,32 @@ interface GoogleVoiceChoice {
 type InstantTopic = { Text?: string; FirstURL?: string };
 type TopicGroup = { Topics?: InstantTopic[] };
 
+class OllamaHttpError extends Error {
+  readonly status: number;
+  readonly model: string;
+  readonly detail: string | undefined;
+
+  constructor(status: number, model: string, detail: string | undefined, hint: string | undefined) {
+    super(
+      [
+        `Ollama request failed with status ${status} using model ${model}.`,
+        detail,
+        hint
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+
+    this.name = "OllamaHttpError";
+    this.status = status;
+    this.model = model;
+    this.detail = detail;
+  }
+}
+
 const OPENROUTER_FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+const OLLAMA_CLOUD_FALLBACK_MODELS = ["gpt-oss:120b", "gpt-oss:120b-cloud"];
+const OLLAMA_LOCAL_FALLBACK_MODELS = ["llama3.1:8b"];
 const GOOGLE_TTS_ENDPOINT = "https://texttospeech.googleapis.com/v1/text:synthesize";
 const GOOGLE_VOICES_ENDPOINT = "https://texttospeech.googleapis.com/v1/voices";
 const GOOGLE_VOICES_TTL_MS = 60 * 60 * 1000;
@@ -309,8 +334,55 @@ export class AiService {
   }
 
   private async runOllamaChat(messages: RouterMessage[], userId: string): Promise<string> {
-    const baseUrl = this.config.ollamaBaseUrl.replace(/\/+$/, "");
-    const endpoint = `${baseUrl}/api/chat`;
+    const endpoint = this.buildOllamaEndpoint("chat");
+    const modelCandidates = this.getOllamaModelCandidates();
+    let lastError: Error | undefined;
+
+    for (const candidateModel of modelCandidates) {
+      try {
+        return await this.requestOllamaChat(endpoint, messages, userId, candidateModel);
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        lastError = normalized;
+
+        const canTryNext =
+          error instanceof OllamaHttpError &&
+          this.isOllamaModelNotFound(error) &&
+          candidateModel !== modelCandidates[modelCandidates.length - 1];
+
+        if (canTryNext) {
+          continue;
+        }
+
+        throw normalized;
+      }
+    }
+
+    if (lastError instanceof OllamaHttpError && this.isOllamaModelNotFound(lastError)) {
+      const availableModels = await this.fetchOllamaModelNames();
+      const availableHint = availableModels.length > 0
+        ? `Available models on this endpoint: ${availableModels.slice(0, 12).join(", ")}.`
+        : "Try listing models with GET /api/tags for this endpoint.";
+
+      throw new Error(
+        [
+          lastError.message,
+          `Tried models: ${modelCandidates.join(", ")}.`,
+          availableHint,
+          "For Ollama Cloud API use OLLAMA_BASE_URL=https://ollama.com and include OLLAMA_API_KEY."
+        ].join(" ")
+      );
+    }
+
+    throw lastError ?? new Error("Ollama request failed before receiving a valid response.");
+  }
+
+  private async requestOllamaChat(
+    endpoint: string,
+    messages: RouterMessage[],
+    userId: string,
+    model: string
+  ): Promise<string> {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), this.config.ollamaTimeoutMs);
 
@@ -318,16 +390,11 @@ export class AiService {
     try {
       response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(this.config.ollamaApiKey
-            ? {
-                Authorization: `Bearer ${this.config.ollamaApiKey}`
-              }
-            : {})
-        },
+        headers: this.getOllamaHeaders({
+          "Content-Type": "application/json"
+        }),
         body: JSON.stringify({
-          model: this.config.ollamaModel,
+          model,
           messages,
           stream: false,
           options: {
@@ -350,15 +417,7 @@ export class AiService {
       const rawBody = await response.text();
       const detail = this.extractProviderError(rawBody);
       const hint = this.ollamaStatusHint(response.status);
-      throw new Error(
-        [
-          `Ollama request failed with status ${response.status} using model ${this.config.ollamaModel}.`,
-          detail,
-          hint
-        ]
-          .filter(Boolean)
-          .join(" ")
-      );
+      throw new OllamaHttpError(response.status, model, detail, hint);
     }
 
     const payload = (await response.json()) as {
@@ -377,6 +436,67 @@ export class AiService {
     }
 
     throw new Error("Ollama returned an empty response.");
+  }
+
+  private buildOllamaEndpoint(pathSuffix: "chat" | "tags"): string {
+    const baseUrl = this.config.ollamaBaseUrl.trim().replace(/\/+$/, "");
+    const apiBase = /\/api$/i.test(baseUrl) ? baseUrl : `${baseUrl}/api`;
+    return `${apiBase}/${pathSuffix}`;
+  }
+
+  private getOllamaHeaders(base: Record<string, string> = {}): Record<string, string> {
+    return {
+      ...base,
+      ...(this.config.ollamaApiKey
+        ? {
+            Authorization: `Bearer ${this.config.ollamaApiKey}`
+          }
+        : {})
+    };
+  }
+
+  private getOllamaModelCandidates(): string[] {
+    const candidates = [
+      this.config.ollamaModel,
+      ...this.config.ollamaFallbackModels,
+      ...(this.isOllamaCloudBaseUrl() ? OLLAMA_CLOUD_FALLBACK_MODELS : OLLAMA_LOCAL_FALLBACK_MODELS)
+    ]
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    return [...new Set(candidates)];
+  }
+
+  private isOllamaCloudBaseUrl(): boolean {
+    const normalized = this.config.ollamaBaseUrl.toLowerCase();
+    return normalized.includes("ollama.com");
+  }
+
+  private isOllamaModelNotFound(error: OllamaHttpError): boolean {
+    return error.status === 404 && /model\s+['"\w\/:.-]+\s+not found|model not found/i.test(error.detail ?? "");
+  }
+
+  private async fetchOllamaModelNames(): Promise<string[]> {
+    try {
+      const response = await fetch(this.buildOllamaEndpoint("tags"), {
+        method: "GET",
+        headers: this.getOllamaHeaders()
+      });
+
+      if (!response.ok) {
+        return [];
+      }
+
+      const payload = (await response.json()) as {
+        models?: Array<{ name?: string }>;
+      };
+
+      return (payload.models ?? [])
+        .map((entry) => entry.name?.trim() ?? "")
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
   }
 
   private ollamaStatusHint(status: number): string | undefined {

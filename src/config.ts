@@ -43,6 +43,7 @@ export interface AppConfig {
   discordGuildId?: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
+  ollamaFallbackModels: string[];
   ollamaApiKey?: string;
   ollamaTimeoutMs: number;
   googleTtsApiKey?: string;
@@ -152,6 +153,15 @@ function envOptionalInt(name: string): number | undefined {
   return parsed;
 }
 
+function envCsv(name: string): string[] {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  return collectUniqueNonEmpty(raw.split(",").map((value) => value.trim()));
+}
+
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -180,8 +190,9 @@ export function loadConfig(): AppConfig {
     ollamaBaseUrl:
       process.env.OLLAMA_BASE_URL?.trim() ||
       process.env.OLLAMA_URL?.trim() ||
-      "https://api.ollama.com",
+      "https://ollama.com",
     ollamaModel: process.env.OLLAMA_MODEL?.trim() || "llama3.1:8b",
+    ollamaFallbackModels: envCsv("OLLAMA_FALLBACK_MODELS"),
     ollamaApiKey: process.env.OLLAMA_API_KEY?.trim() || undefined,
     ollamaTimeoutMs: Math.max(5_000, Math.min(120_000, envInt("OLLAMA_TIMEOUT_MS", 30_000))),
     googleTtsApiKey:

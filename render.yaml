@@ -9,9 +9,11 @@ services:
       - key: NODE_ENV
         value: production
       - key: OLLAMA_BASE_URL
-        value: https://api.ollama.com
+        value: https://ollama.com
       - key: OLLAMA_MODEL
         value: llama3.1:8b
+      - key: OLLAMA_FALLBACK_MODELS
+        value: gpt-oss:120b,gpt-oss:120b-cloud
       - key: USE_SUPABASE_STORAGE
         value: "false"
       - key: SUPABASE_TTS_BUCKET
