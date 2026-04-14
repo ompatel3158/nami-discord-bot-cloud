@@ -22,6 +22,13 @@ interface AskOptions {
   userId: string;
 }
 
+interface EnhanceMessageOptions {
+  draft: string;
+  instructions?: string;
+  preferences: UserPreferences;
+  userId: string;
+}
+
 interface SpeechOptions {
   text: string;
   voiceId: TtsVoice;
@@ -311,6 +318,42 @@ export class AiService {
     };
   }
 
+  async enhanceOutgoingMessage(options: EnhanceMessageOptions): Promise<string> {
+    const draft = options.draft.trim();
+    if (!draft) {
+      throw new Error("Cannot enhance an empty message.");
+    }
+
+    const instructions = options.instructions?.trim() || "Polish this message for clarity while preserving intent.";
+
+    const rewritten = await this.runTextChat(
+      [
+        {
+          role: "system",
+          content: [
+            "You rewrite user text for Discord.",
+            "Keep meaning and tone the same.",
+            "Do not add facts, links, hashtags, or extra context.",
+            "Keep it concise and natural.",
+            "Return only the final rewritten message with no explanation and no quotes."
+          ].join("\n")
+        },
+        {
+          role: "user",
+          content: [
+            `Instruction: ${instructions}`,
+            `Draft: ${draft}`
+          ].join("\n")
+        }
+      ],
+      options.userId,
+      options.preferences
+    );
+
+    const cleaned = rewritten.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+    return cleaned || draft;
+  }
+
   async searchWeb(query: string, preferences: UserPreferences, userId: string): Promise<SearchResult> {
     const searchResults = await this.fetchSearchResults(query);
     if (searchResults.length === 0) {
@@ -351,6 +394,7 @@ export class AiService {
     preferences: UserPreferences
   ): Promise<string> {
     if (preferences.modelMode === "uncensored") {
+      console.log(`[AI] Routing user ${userId} request to Ollama (uncensored mode).`);
       return this.runOllamaChat(messages, userId);
     }
 
@@ -358,6 +402,7 @@ export class AiService {
       throw new Error("Smart mode requires OPENROUTER_API_KEY.");
     }
 
+    console.log(`[AI] Routing user ${userId} request to OpenRouter model ${this.config.openRouterModel}.`);
     return this.runOpenRouterChat(messages, userId, this.config.openRouterModel);
   }
 
@@ -449,14 +494,38 @@ export class AiService {
     }
 
     const payload = (await response.json()) as {
-      message?: { content?: string };
+      message?: { content?: string | Array<{ text?: string }> };
       response?: string;
+      choices?: Array<{ message?: { content?: string | Array<{ text?: string }> }; text?: string }>;
       error?: string;
     };
 
-    const content = payload.message?.content ?? payload.response;
-    if (typeof content === "string" && content.trim()) {
-      return content.trim();
+    const normalizeContent = (value: string | Array<{ text?: string }> | undefined): string | undefined => {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed || undefined;
+      }
+
+      if (Array.isArray(value)) {
+        const joined = value
+          .map((item) => item.text?.trim() || "")
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        return joined || undefined;
+      }
+
+      return undefined;
+    };
+
+    const content =
+      normalizeContent(payload.message?.content) ??
+      normalizeContent(payload.choices?.[0]?.message?.content) ??
+      (typeof payload.choices?.[0]?.text === "string" ? payload.choices[0].text.trim() || undefined : undefined) ??
+      (typeof payload.response === "string" ? payload.response.trim() || undefined : undefined);
+
+    if (content) {
+      return content;
     }
 
     if (typeof payload.error === "string" && payload.error.trim()) {

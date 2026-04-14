@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits, REST, Routes } from "discord.js";
+import { Client, Events, GatewayIntentBits, PermissionFlagsBits, REST, Routes } from "discord.js";
 import { mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import cron from "node-cron";
@@ -73,8 +73,56 @@ const commandMap = new Map<string, BotCommand>(commands.map((command: BotCommand
 const lastAutoVoiceSpeakerByGuild = new Map<string, string>();
 let keepaliveCronStarted = false;
 
+interface SendMessageIntent {
+  targetToken: string;
+  draftMessage: string;
+  skipEditing: boolean;
+}
+
 function clearGuildAutoVoiceState(guildId: string): void {
   lastAutoVoiceSpeakerByGuild.delete(guildId);
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function parseSendMessageIntent(prompt: string): SendMessageIntent | null {
+  const normalizedPrompt = normalizeWhitespace(prompt);
+  const match = normalizedPrompt.match(/^send\s+(?:msg|message)\s+to\s+(.+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const remainder = match[1].trim();
+  if (!remainder) {
+    return null;
+  }
+
+  const [rawTargetToken, ...restTokens] = remainder.split(/\s+/);
+  const targetToken = rawTargetToken.replace(/[.,!?]$/, "").trim();
+  let draftMessage = restTokens.join(" ").trim();
+  draftMessage = draftMessage.replace(/^(?:say|saying|msg|message)\s+/i, "").trim();
+
+  const skipEditing =
+    /\b(?:dont|don't|do\s+not)\s+edit(?:\s+it)?\b/i.test(draftMessage) ||
+    /\b(?:no|without)\s+edit(?:ing)?\b/i.test(draftMessage);
+
+  draftMessage = draftMessage
+    .replace(/\b(?:dont|don't|do\s+not)\s+edit(?:\s+it)?\b/gi, " ")
+    .replace(/\b(?:no|without)\s+edit(?:ing)?\b/gi, " ");
+
+  draftMessage = normalizeWhitespace(draftMessage);
+
+  if (!targetToken || !draftMessage) {
+    return null;
+  }
+
+  return {
+    targetToken,
+    draftMessage,
+    skipEditing
+  };
 }
 
 async function registerCommands(): Promise<void> {
@@ -335,6 +383,113 @@ client.on(Events.MessageCreate, async (message) => {
   if (!cleanedPrompt) {
     await message.reply({
       content: "Mention me with a message and I'll chat back. Example: `@Nami explain slash commands`",
+      allowedMentions: { repliedUser: false, parse: [] }
+    });
+    return;
+  }
+
+  const sendCommandPrefixDetected = /^send\s+(?:msg|message)\s+to\b/i.test(cleanedPrompt);
+  const sendIntent = parseSendMessageIntent(cleanedPrompt);
+
+  if (sendCommandPrefixDetected && !sendIntent) {
+    await message.reply({
+      content: "Use this format: `@Nami send msg to #channel say your message`. Add `don't edit` to keep your text exactly as typed.",
+      allowedMentions: { repliedUser: false, parse: [] }
+    });
+    return;
+  }
+
+  if (sendIntent && message.guild) {
+    const mentionMatch = sendIntent.targetToken.match(/^<#(\d+)>$/);
+    const explicitName = sendIntent.targetToken.startsWith("#")
+      ? sendIntent.targetToken.slice(1).toLowerCase()
+      : "";
+
+    let targetChannel = mentionMatch
+      ? await message.guild.channels.fetch(mentionMatch[1]).catch(() => null)
+      : null;
+
+    if (!targetChannel && explicitName) {
+      targetChannel =
+        message.guild.channels.cache.find((channel) => channel.name.toLowerCase() === explicitName) ?? null;
+    }
+
+    if (!targetChannel) {
+      await message.reply({
+        content: `I couldn't find channel ${sendIntent.targetToken}. Mention the channel like <#id> or use an exact #name.`,
+        allowedMentions: { repliedUser: false, parse: [] }
+      });
+      return;
+    }
+
+    if (!targetChannel.isTextBased() || typeof targetChannel.send !== "function") {
+      await message.reply({
+        content: `I can only send messages to text channels. ${sendIntent.targetToken} is not sendable.`,
+        allowedMentions: { repliedUser: false, parse: [] }
+      });
+      return;
+    }
+
+    const botPermissions = targetChannel.permissionsFor(client.user.id);
+    if (
+      !botPermissions?.has(PermissionFlagsBits.ViewChannel) ||
+      !botPermissions.has(PermissionFlagsBits.SendMessages)
+    ) {
+      await message.reply({
+        content: `I don't have permission to send messages in <#${targetChannel.id}>.`,
+        allowedMentions: { repliedUser: false, parse: [] }
+      });
+      return;
+    }
+
+    if (message.member) {
+      const userPermissions = targetChannel.permissionsFor(message.member);
+      if (
+        !userPermissions?.has(PermissionFlagsBits.ViewChannel) ||
+        !userPermissions.has(PermissionFlagsBits.SendMessages)
+      ) {
+        await message.reply({
+          content: `You don't have permission to send messages in <#${targetChannel.id}>.`,
+          allowedMentions: { repliedUser: false, parse: [] }
+        });
+        return;
+      }
+    }
+
+    const preferences = await storage.getUserPreferences(message.author.id);
+    let outgoingText = sendIntent.draftMessage;
+    let usedEnhancement = false;
+
+    if (!sendIntent.skipEditing) {
+      try {
+        outgoingText = await context.ai.enhanceOutgoingMessage({
+          draft: sendIntent.draftMessage,
+          userId: message.author.id,
+          preferences,
+          instructions:
+            "Polish this Discord message for clarity and flow, but keep the same intent and key details. Do not add extra facts."
+        });
+        usedEnhancement = true;
+      } catch (error) {
+        console.warn("Message enhancement failed, sending original text", error);
+      }
+    }
+
+    const chunks = splitMessage(outgoingText);
+    await targetChannel.send({
+      content: chunks[0],
+      allowedMentions: { parse: [] }
+    });
+
+    for (const chunk of chunks.slice(1)) {
+      await targetChannel.send({
+        content: chunk,
+        allowedMentions: { parse: [] }
+      });
+    }
+
+    await message.reply({
+      content: `Sent to <#${targetChannel.id}>${usedEnhancement ? " (AI-enhanced)" : ""}.`,
       allowedMentions: { repliedUser: false, parse: [] }
     });
     return;

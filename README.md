@@ -6,6 +6,7 @@ It supports:
 
 - AI Q&A through OpenRouter for smart mode and Ollama for uncensored mode
 - Chat-style replies when users mention `@Nami`
+- Mention-driven channel posting with optional AI polish (`@Nami send msg to #channel ...`)
 - Web search summaries using DuckDuckGo search results plus AI summarization
 - Text games like guessing, trivia, scramble, rock-paper-scissors, and coinflip
 - Text-to-speech in voice channels with Google Cloud Text-to-Speech
@@ -152,6 +153,7 @@ Both return JSON status including bot readiness and TTS availability.
 
 - `/ask prompt:<text> web:<true|false>`: Ask Nami an AI question
 - `@Nami your message`: Chat naturally by mentioning the bot in a server
+- `@Nami send msg to #general say hello team`: Send a message to another channel (add `don't edit` to keep exact text)
 - `/search query:<text>`: Search the web and summarize results
 - `/preferences view|voice|search|language|reset`: Manage personal preferences
 - `/preferences model mode:<smart|uncensored>`: Smart mode uses OpenRouter, uncensored mode uses Ollama
@@ -179,6 +181,7 @@ Both return JSON status including bot readiness and TTS availability.
 - Google Cloud quota reference (as of docs updated 2026-04-10): content is limited to 5,000 bytes per request, and default project request quota includes 1,000 requests/minute for standard/non-dedicated voices.
 - As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
 - Uncensored mode requires a reachable Ollama endpoint from the deployed environment. For cloud calls, use `OLLAMA_BASE_URL=https://ollama.com`; for local daemon use `OLLAMA_BASE_URL=http://localhost:11434`.
+- Mention send-to-channel only posts if both you and the bot can send in the target channel.
 - Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.
 
