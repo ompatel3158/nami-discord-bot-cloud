@@ -79,12 +79,38 @@ interface SendMessageIntent {
   skipEditing: boolean;
 }
 
+interface DirectSayIntent {
+  draftMessage: string;
+  skipEditing: boolean;
+}
+
 function clearGuildAutoVoiceState(guildId: string): void {
   lastAutoVoiceSpeakerByGuild.delete(guildId);
 }
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeChannelLookupKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function parseDraftEditPreference(draftMessage: string): { text: string; skipEditing: boolean } {
+  const skipEditing =
+    /\b(?:dont|don't|do\s+not)\s+edit(?:\s+it)?\b/i.test(draftMessage) ||
+    /\b(?:no|without)\s+edit(?:ing)?\b/i.test(draftMessage);
+
+  const text = normalizeWhitespace(
+    draftMessage
+      .replace(/\b(?:dont|don't|do\s+not)\s+edit(?:\s+it)?\b/gi, " ")
+      .replace(/\b(?:no|without)\s+edit(?:ing)?\b/gi, " ")
+  );
+
+  return { text, skipEditing };
 }
 
 function parseSendMessageIntent(prompt: string): SendMessageIntent | null {
@@ -104,15 +130,8 @@ function parseSendMessageIntent(prompt: string): SendMessageIntent | null {
   let draftMessage = restTokens.join(" ").trim();
   draftMessage = draftMessage.replace(/^(?:say|saying|msg|message)\s+/i, "").trim();
 
-  const skipEditing =
-    /\b(?:dont|don't|do\s+not)\s+edit(?:\s+it)?\b/i.test(draftMessage) ||
-    /\b(?:no|without)\s+edit(?:ing)?\b/i.test(draftMessage);
-
-  draftMessage = draftMessage
-    .replace(/\b(?:dont|don't|do\s+not)\s+edit(?:\s+it)?\b/gi, " ")
-    .replace(/\b(?:no|without)\s+edit(?:ing)?\b/gi, " ");
-
-  draftMessage = normalizeWhitespace(draftMessage);
+  const parsedDraft = parseDraftEditPreference(draftMessage);
+  draftMessage = parsedDraft.text;
 
   if (!targetToken || !draftMessage) {
     return null;
@@ -121,7 +140,29 @@ function parseSendMessageIntent(prompt: string): SendMessageIntent | null {
   return {
     targetToken,
     draftMessage,
-    skipEditing
+    skipEditing: parsedDraft.skipEditing
+  };
+}
+
+function parseDirectSayIntent(prompt: string): DirectSayIntent | null {
+  const normalizedPrompt = normalizeWhitespace(prompt);
+  if (/^send\s+(?:msg|message)\s+to\b/i.test(normalizedPrompt)) {
+    return null;
+  }
+
+  const match = normalizedPrompt.match(/^say\s+(.+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const parsedDraft = parseDraftEditPreference(match[1]);
+  if (!parsedDraft.text) {
+    return null;
+  }
+
+  return {
+    draftMessage: parsedDraft.text,
+    skipEditing: parsedDraft.skipEditing
   };
 }
 
@@ -402,16 +443,22 @@ client.on(Events.MessageCreate, async (message) => {
   if (sendIntent && message.guild) {
     const mentionMatch = sendIntent.targetToken.match(/^<#(\d+)>$/);
     const explicitName = sendIntent.targetToken.startsWith("#")
-      ? sendIntent.targetToken.slice(1).toLowerCase()
-      : "";
+      ? sendIntent.targetToken.slice(1)
+      : sendIntent.targetToken;
+    const normalizedExplicitName = normalizeChannelLookupKey(explicitName);
 
     let targetChannel = mentionMatch
       ? await message.guild.channels.fetch(mentionMatch[1]).catch(() => null)
       : null;
 
     if (!targetChannel && explicitName) {
+      const loweredExplicitName = explicitName.toLowerCase();
       targetChannel =
-        message.guild.channels.cache.find((channel) => channel.name.toLowerCase() === explicitName) ?? null;
+        message.guild.channels.cache.find((channel) => channel.name.toLowerCase() === loweredExplicitName) ??
+        message.guild.channels.cache.find(
+          (channel) => normalizeChannelLookupKey(channel.name) === normalizedExplicitName
+        ) ??
+        null;
     }
 
     if (!targetChannel) {
@@ -492,6 +539,41 @@ client.on(Events.MessageCreate, async (message) => {
       content: `Sent to <#${targetChannel.id}>${usedEnhancement ? " (AI-enhanced)" : ""}.`,
       allowedMentions: { repliedUser: false, parse: [] }
     });
+    return;
+  }
+
+  const directSayIntent = parseDirectSayIntent(cleanedPrompt);
+  if (directSayIntent) {
+    const preferences = await storage.getUserPreferences(message.author.id);
+    let outgoingText = directSayIntent.draftMessage;
+
+    if (!directSayIntent.skipEditing) {
+      try {
+        outgoingText = await context.ai.enhanceOutgoingMessage({
+          draft: directSayIntent.draftMessage,
+          userId: message.author.id,
+          preferences,
+          instructions:
+            "Polish this Discord message for clarity and flow, but keep the same intent and key details. Do not add extra facts."
+        });
+      } catch (error) {
+        console.warn("Direct say enhancement failed, sending original text", error);
+      }
+    }
+
+    const chunks = splitMessage(outgoingText);
+    await message.channel.send({
+      content: chunks[0],
+      allowedMentions: { parse: [] }
+    });
+
+    for (const chunk of chunks.slice(1)) {
+      await message.channel.send({
+        content: chunk,
+        allowedMentions: { parse: [] }
+      });
+    }
+
     return;
   }
 

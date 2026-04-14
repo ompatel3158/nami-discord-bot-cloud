@@ -324,6 +324,16 @@ export class AiService {
       throw new Error("Cannot enhance an empty message.");
     }
 
+    const protectedLiterals: string[] = [];
+    const draftWithPlaceholders = draft.replace(
+      /<@!?\d+>|<@&\d+>|<#\d+>|<a?:\w+:\d+>|https?:\/\/\S+/g,
+      (match) => {
+        const token = `__NAMI_LITERAL_${protectedLiterals.length}__`;
+        protectedLiterals.push(match);
+        return token;
+      }
+    );
+
     const instructions = options.instructions?.trim() || "Polish this message for clarity while preserving intent.";
 
     const rewritten = await this.runTextChat(
@@ -342,7 +352,7 @@ export class AiService {
           role: "user",
           content: [
             `Instruction: ${instructions}`,
-            `Draft: ${draft}`
+            `Draft: ${draftWithPlaceholders}`
           ].join("\n")
         }
       ],
@@ -350,8 +360,22 @@ export class AiService {
       options.preferences
     );
 
-    const cleaned = rewritten.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
-    return cleaned || draft;
+    let cleaned = rewritten.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+
+    for (let index = 0; index < protectedLiterals.length; index += 1) {
+      const token = `__NAMI_LITERAL_${index}__`;
+      cleaned = cleaned.split(token).join(protectedLiterals[index]);
+    }
+
+    if (!cleaned || this.looksLikeRewriteRefusal(cleaned)) {
+      return draft;
+    }
+
+    return cleaned;
+  }
+
+  private looksLikeRewriteRefusal(text: string): boolean {
+    return /\b(?:i\s*(?:am|'m)?\s*sorry|i\s*(?:cannot|can't)\s+(?:help|assist)|as\s+an\s+ai|i\s+won'?t\s+help)\b/i.test(text);
   }
 
   async searchWeb(query: string, preferences: UserPreferences, userId: string): Promise<SearchResult> {

@@ -1,6 +1,6 @@
 {
   "name": "nami-discord-bot",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "Nami is a modular Discord bot with AI chat, web search, text games, TTS, preferences, and admin commands.",
   "type": "module",

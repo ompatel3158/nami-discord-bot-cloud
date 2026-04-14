@@ -153,6 +153,7 @@ Both return JSON status including bot readiness and TTS availability.
 
 - `/ask prompt:<text> web:<true|false>`: Ask Nami an AI question
 - `@Nami your message`: Chat naturally by mentioning the bot in a server
+- `@Nami say <text>`: Post text directly in the current channel (add `don't edit` to keep exact text)
 - `@Nami send msg to #general say hello team`: Send a message to another channel (add `don't edit` to keep exact text)
 - `/search query:<text>`: Search the web and summarize results
 - `/preferences view|voice|search|language|reset`: Manage personal preferences
@@ -182,6 +183,7 @@ Both return JSON status including bot readiness and TTS availability.
 - As of April 10, 2026, OpenRouter free models can still have provider-side rate, concurrency, or credit limits. "Free" does not mean unlimited.
 - Uncensored mode requires a reachable Ollama endpoint from the deployed environment. For cloud calls, use `OLLAMA_BASE_URL=https://ollama.com`; for local daemon use `OLLAMA_BASE_URL=http://localhost:11434`.
 - Mention send-to-channel only posts if both you and the bot can send in the target channel.
+- Send-to-channel accepts both direct channel mentions (`<#id>`) and name tokens like `#general-chat`, including decorated channel names such as `🗨️┃general-chat`.
 - Render free instances use ephemeral local storage. If the service is rebuilt/restarted, `data/storage.json` may reset unless you attach persistent storage or external DB.
 - Slash commands are registered automatically on startup.
 
