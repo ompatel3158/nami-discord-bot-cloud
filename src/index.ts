@@ -80,6 +80,7 @@ interface SendMessageIntent {
 }
 
 interface DirectSayIntent {
+  targetToken?: string;
   draftMessage: string;
   skipEditing: boolean;
 }
@@ -111,6 +112,10 @@ function parseDraftEditPreference(draftMessage: string): { text: string; skipEdi
   );
 
   return { text, skipEditing };
+}
+
+function looksLikeChannelToken(token: string): boolean {
+  return /^<#\d+>$/.test(token) || token.startsWith("#") || /[|┃]/.test(token);
 }
 
 function parseSendMessageIntent(prompt: string): SendMessageIntent | null {
@@ -158,6 +163,21 @@ function parseDirectSayIntent(prompt: string): DirectSayIntent | null {
   const parsedDraft = parseDraftEditPreference(match[1]);
   if (!parsedDraft.text) {
     return null;
+  }
+
+  const draftTokens = parsedDraft.text.split(/\s+/);
+  if (draftTokens.length >= 2) {
+    const maybeTargetToken = draftTokens[0].replace(/[.,!?]$/, "").trim();
+    if (looksLikeChannelToken(maybeTargetToken)) {
+      const messageWithoutTarget = normalizeWhitespace(draftTokens.slice(1).join(" "));
+      if (messageWithoutTarget) {
+        return {
+          targetToken: maybeTargetToken,
+          draftMessage: messageWithoutTarget,
+          skipEditing: parsedDraft.skipEditing
+        };
+      }
+    }
   }
 
   return {
@@ -431,6 +451,14 @@ client.on(Events.MessageCreate, async (message) => {
 
   const sendCommandPrefixDetected = /^send\s+(?:msg|message)\s+to\b/i.test(cleanedPrompt);
   const sendIntent = parseSendMessageIntent(cleanedPrompt);
+  const directSayIntent = parseDirectSayIntent(cleanedPrompt);
+  const effectiveSendIntent = sendIntent ?? (directSayIntent?.targetToken
+    ? {
+        targetToken: directSayIntent.targetToken,
+        draftMessage: directSayIntent.draftMessage,
+        skipEditing: directSayIntent.skipEditing
+      }
+    : null);
 
   if (sendCommandPrefixDetected && !sendIntent) {
     await message.reply({
@@ -440,11 +468,11 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  if (sendIntent && message.guild) {
-    const mentionMatch = sendIntent.targetToken.match(/^<#(\d+)>$/);
-    const explicitName = sendIntent.targetToken.startsWith("#")
-      ? sendIntent.targetToken.slice(1)
-      : sendIntent.targetToken;
+  if (effectiveSendIntent && message.guild) {
+    const mentionMatch = effectiveSendIntent.targetToken.match(/^<#(\d+)>$/);
+    const explicitName = effectiveSendIntent.targetToken.startsWith("#")
+      ? effectiveSendIntent.targetToken.slice(1)
+      : effectiveSendIntent.targetToken;
     const normalizedExplicitName = normalizeChannelLookupKey(explicitName);
 
     let targetChannel = mentionMatch
@@ -463,7 +491,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (!targetChannel) {
       await message.reply({
-        content: `I couldn't find channel ${sendIntent.targetToken}. Mention the channel like <#id> or use an exact #name.`,
+        content: `I couldn't find channel ${effectiveSendIntent.targetToken}. Mention the channel like <#id> or use an exact #name.`,
         allowedMentions: { repliedUser: false, parse: [] }
       });
       return;
@@ -471,7 +499,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (!targetChannel.isTextBased() || typeof targetChannel.send !== "function") {
       await message.reply({
-        content: `I can only send messages to text channels. ${sendIntent.targetToken} is not sendable.`,
+        content: `I can only send messages to text channels. ${effectiveSendIntent.targetToken} is not sendable.`,
         allowedMentions: { repliedUser: false, parse: [] }
       });
       return;
@@ -504,13 +532,13 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const preferences = await storage.getUserPreferences(message.author.id);
-    let outgoingText = sendIntent.draftMessage;
+    let outgoingText = effectiveSendIntent.draftMessage;
     let usedEnhancement = false;
 
-    if (!sendIntent.skipEditing) {
+    if (!effectiveSendIntent.skipEditing) {
       try {
         outgoingText = await context.ai.enhanceOutgoingMessage({
-          draft: sendIntent.draftMessage,
+          draft: effectiveSendIntent.draftMessage,
           userId: message.author.id,
           preferences,
           instructions:
@@ -542,8 +570,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  const directSayIntent = parseDirectSayIntent(cleanedPrompt);
-  if (directSayIntent) {
+  if (directSayIntent && !directSayIntent.targetToken) {
     const preferences = await storage.getUserPreferences(message.author.id);
     let outgoingText = directSayIntent.draftMessage;
 

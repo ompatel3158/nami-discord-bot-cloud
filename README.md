@@ -154,6 +154,7 @@ Both return JSON status including bot readiness and TTS availability.
 - `/ask prompt:<text> web:<true|false>`: Ask Nami an AI question
 - `@Nami your message`: Chat naturally by mentioning the bot in a server
 - `@Nami say <text>`: Post text directly in the current channel (add `don't edit` to keep exact text)
+- `@Nami say #general-chat <text>`: Shorthand to send to another channel without writing `send msg to`
 - `@Nami send msg to #general say hello team`: Send a message to another channel (add `don't edit` to keep exact text)
 - `/search query:<text>`: Search the web and summarize results
 - `/preferences view|voice|search|language|reset`: Manage personal preferences
