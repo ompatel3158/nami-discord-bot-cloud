@@ -2,84 +2,84 @@ const commandGroups = [
   {
     id: "ai",
     kicker: "AI + Search",
-    title: "Ask, search, and keep the conversation moving.",
+    title: "Ask anything, get useful answers, and keep chat moving.",
     summary:
-      "Nami can answer directly, browse the web for summaries, and keep context through remembered server conversations.",
+      "Nami answers naturally in-channel, summarizes web results, and keeps context with memory-aware replies.",
     commands: [
       {
         command: "/ask prompt:How do I plan a tournament? web:true",
-        detail: "Answer with live web context when you need current information."
+        detail: "Get structured answers with optional live web context."
       },
       {
         command: "/search query:best Valorant warmup drills",
-        detail: "Get a fast web summary with source-aware results."
+        detail: "Pull fast search summaries when members need up-to-date info."
       },
       {
         command: "@Nami give me a cleaner version of this announcement",
-        detail: "Use mention chat for quick natural interaction in-channel."
+        detail: "Use mention chat for quick, natural help without command friction."
       }
     ]
   },
   {
     id: "voice",
     kicker: "Voice + TTS",
-    title: "Queue speech that sounds intentional, not robotic.",
+    title: "Use voice tools that feel clear, expressive, and reliable.",
     summary:
-      "Google TTS voices, saved voice preferences, queue controls, and auto-read behavior make Nami work inside real voice channels.",
+      "Nami supports expressive TTS, saved voice preferences, queue control, and practical auto-read behavior.",
     commands: [
       {
         command: "/voice join",
-        detail: "Bring Nami into your current voice channel."
+        detail: "Bring Nami into the active voice channel instantly."
       },
       {
         command: "/tts say text:match starts in five minutes",
-        detail: "Generate speech with your preferred voice and speed."
+        detail: "Speak announcements with preferred voice and playback speed."
       },
       {
         command: "/voice auto-read enabled:true",
-        detail: "Automatically read incoming chat in supported voice flows."
+        detail: "Enable automatic readouts for voice-driven server flows."
       }
     ]
   },
   {
     id: "games",
     kicker: "Games + Memory",
-    title: "Keep your server playful without leaving the same bot.",
+    title: "Keep members engaged without adding extra bots.",
     summary:
-      "Nami mixes utility with fun, including trivia, scramble, guessing, rock-paper-scissors, and personal memory controls.",
+      "Nami blends utility and fun with mini-games plus conversation memory controls.",
     commands: [
       {
         command: "/game trivia",
-        detail: "Start a trivia round inside the server chat."
+        detail: "Start quick trivia rounds directly in chat."
       },
       {
         command: "/game scramble",
-        detail: "Drop a quick word challenge between conversations."
+        detail: "Keep activity high with short word challenges."
       },
       {
         command: "/memory view count:12",
-        detail: "Inspect the recent messages Nami is remembering for you."
+        detail: "Review what Nami remembers for more contextual replies."
       }
     ]
   },
   {
     id: "admin",
     kicker: "Automation + Admin",
-    title: "Handle community workflows without switching tools.",
+    title: "Run server operations from one command system.",
     summary:
-      "Nami can send channel messages, route announcements, toggle features, and manage server-level AI and voice settings.",
+      "Automate announcements, channel messaging, and bot features with admin-safe controls.",
     commands: [
       {
         command: "@Nami send msg to #updates say patch notes are live",
-        detail: "Send cross-channel messages with optional AI cleanup."
+        detail: "Send cross-channel updates with optional AI polishing."
       },
       {
         command: "/admin feature name:tts enabled:true",
-        detail: "Enable or disable systems per server."
+        detail: "Turn major bot systems on or off per server."
       },
       {
         command: "/admin announce message:Scrims start at 9 PM",
-        detail: "Push announcements from one consistent command path."
+        detail: "Broadcast important updates from one reliable path."
       }
     ]
   }
