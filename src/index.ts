@@ -190,6 +190,17 @@ async function registerCommands(): Promise<void> {
   const rest = new REST({ version: "10" }).setToken(config.discordToken);
   const body = commands.map((command: BotCommand) => command.data.toJSON());
 
+  const application = (await rest.get(Routes.currentApplication())) as { id?: string; name?: string };
+  if (!application?.id) {
+    throw new Error("Unable to resolve application metadata from the Discord token.");
+  }
+
+  if (application.id !== config.discordClientId) {
+    throw new Error(
+      `DISCORD_CLIENT_ID mismatch: env has ${config.discordClientId}, but token belongs to application ${application.id} (${application.name ?? "unknown"}).`
+    );
+  }
+
   if (config.discordGuildId) {
     await rest.put(Routes.applicationGuildCommands(config.discordClientId, config.discordGuildId), {
       body
