@@ -194,9 +194,10 @@ async function registerCommands(): Promise<void> {
     await rest.put(Routes.applicationGuildCommands(config.discordClientId, config.discordGuildId), {
       body
     });
-    await rest.put(Routes.applicationCommands(config.discordClientId), { body: [] });
     console.log(`Registered ${body.length} guild command(s) for ${config.discordGuildId}.`);
-    console.log("Cleared global commands to avoid duplicate slash command entries during guild development.");
+    await rest.put(Routes.applicationCommands(config.discordClientId), { body });
+    console.log(`Registered ${body.length} global command(s).`);
+    console.log("Guild commands update immediately; global commands can take a few minutes to appear in other servers.");
     return;
   }
 
