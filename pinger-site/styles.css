@@ -415,7 +415,7 @@ h1 {
   box-shadow: var(--shadow);
   overflow: hidden;
   padding: 24px;
-  transform-style: preserve-3d;
+  transform-style: flat;
   transition: transform 220ms ease-out;
 }
 
@@ -612,8 +612,9 @@ h1 {
 .hero-command-featured {
   margin-top: 14px;
   z-index: 2;
-  background: rgba(7, 16, 28, 0.78);
-  backdrop-filter: blur(8px);
+  background: rgba(7, 16, 28, 0.95);
+  backdrop-filter: none;
+  isolation: isolate;
 }
 
 .command-stage__meta p,
@@ -634,12 +635,13 @@ h1 {
 }
 
 .signal-row {
-  position: absolute;
-  inset: auto 24px 22px;
+  position: relative;
+  margin-top: 12px;
   gap: 10px;
   color: rgba(240, 246, 251, 0.72);
   font-size: 0.8rem;
-  z-index: 2;
+  z-index: 1;
+  justify-content: flex-start;
 }
 
 .signal-row span {
@@ -1435,10 +1437,6 @@ h1 {
 
   .hero-command-track {
     animation-duration: 22s;
-  }
-
-  .signal-row {
-    inset: auto 16px 16px;
   }
 
   .hero-command__text {

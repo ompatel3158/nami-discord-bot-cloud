@@ -359,48 +359,11 @@ function setupRevealObserver() {
 }
 
 function setupHeroMotion() {
-  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const supportsFinePointer = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
-
-  if (!heroStage || prefersReducedMotion || !supportsFinePointer) {
-    if (heroStage) {
-      heroStage.style.transform = "none";
-    }
+  if (!heroStage) {
     return;
   }
 
-  const limit = 8;
-  let currentX = 0;
-  let currentY = 0;
-  let targetX = 0;
-  let targetY = 0;
-  let frameId = 0;
-
-  const animate = () => {
-    currentX += (targetX - currentX) * 0.12;
-    currentY += (targetY - currentY) * 0.12;
-    heroStage.style.transform = `perspective(1200px) rotateX(${currentY}deg) rotateY(${currentX}deg) translateZ(0)`;
-    frameId = window.requestAnimationFrame(animate);
-  };
-
-  frameId = window.requestAnimationFrame(animate);
-
-  heroStage.addEventListener("pointermove", (event) => {
-    const rect = heroStage.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width - 0.5;
-    const y = (event.clientY - rect.top) / rect.height - 0.5;
-    targetY = -(y * limit);
-    targetX = x * limit;
-  });
-
-  heroStage.addEventListener("pointerleave", () => {
-    targetX = 0;
-    targetY = 0;
-  });
-
-  window.addEventListener("beforeunload", () => {
-    window.cancelAnimationFrame(frameId);
-  });
+  heroStage.style.transform = "none";
 }
 
 function setupHeroMarquee() {
