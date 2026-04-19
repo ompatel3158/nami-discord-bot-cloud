@@ -260,8 +260,9 @@ h3 {
 }
 
 h1 {
-  font-size: clamp(3.3rem, 8vw, 7rem);
-  max-width: 12ch;
+  font-size: clamp(2.4rem, 5.3vw, 5.2rem);
+  max-width: 15ch;
+  line-height: 1.02;
 }
 
 .hero-text,
@@ -822,6 +823,9 @@ h1 {
 
 .navigator-visual__frame {
   position: relative;
+  width: 100%;
+  max-width: 560px;
+  justify-self: end;
   border-radius: 34px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -851,9 +855,9 @@ h1 {
 .navigator-visual img {
   width: 100%;
   display: block;
-  aspect-ratio: 0.72;
+  aspect-ratio: 16 / 10;
   object-fit: cover;
-  object-position: center top;
+  object-position: center;
 }
 
 .navigator-visual figcaption {
@@ -1241,6 +1245,11 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .navigator-visual__frame {
+    justify-self: center;
+    max-width: 680px;
+  }
+
   .metrics,
   .integration-grid,
   .status-grid {
@@ -1308,7 +1317,7 @@ h1 {
   }
 
   h1 {
-    max-width: 10ch;
+    max-width: 11ch;
   }
 
   .hero-stage,
