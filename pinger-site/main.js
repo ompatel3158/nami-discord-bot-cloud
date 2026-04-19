@@ -359,7 +359,13 @@ function setupRevealObserver() {
 }
 
 function setupHeroMotion() {
-  if (!heroStage || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const supportsFinePointer = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+  if (!heroStage || prefersReducedMotion || !supportsFinePointer) {
+    if (heroStage) {
+      heroStage.style.transform = "none";
+    }
     return;
   }
 

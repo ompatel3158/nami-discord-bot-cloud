@@ -403,6 +403,7 @@ h1 {
 .hero-stage {
   position: relative;
   width: min(100%, 520px);
+  margin-inline: auto;
   min-height: 560px;
   border-radius: 34px;
   border: 1px solid var(--line);
@@ -530,11 +531,11 @@ h1 {
 
 .hero-float-primary {
   top: 8%;
-  right: -4%;
+  right: clamp(10px, 2.2vw, 22px);
 }
 
 .hero-float-secondary {
-  left: -5%;
+  left: clamp(10px, 2.2vw, 22px);
   bottom: 8%;
   animation-delay: -2.2s;
 }
@@ -607,6 +608,9 @@ h1 {
 
 .hero-command-featured {
   margin-top: 14px;
+  z-index: 3;
+  background: rgba(7, 16, 28, 0.78);
+  backdrop-filter: blur(8px);
 }
 
 .command-stage__meta p,
@@ -632,6 +636,7 @@ h1 {
   gap: 10px;
   color: rgba(240, 246, 251, 0.72);
   font-size: 0.8rem;
+  z-index: 2;
 }
 
 .signal-row span {
@@ -1308,11 +1313,11 @@ h1 {
   }
 
   .hero-float-primary {
-    right: 0;
+    right: 12px;
   }
 
   .hero-float-secondary {
-    left: 0;
+    left: 12px;
   }
 
   .orbit-one {
@@ -1345,6 +1350,21 @@ h1 {
     position: absolute;
     max-width: 170px;
     padding: 12px 13px;
+  }
+
+  .hero-command-marquee {
+    margin-top: 16px;
+  }
+
+  .hero-command-featured {
+    margin-top: 12px;
+  }
+
+  .signal-row {
+    position: static;
+    inset: auto;
+    margin-top: 12px;
+    justify-content: flex-start;
   }
 
   .metrics,
@@ -1420,5 +1440,7 @@ h1 {
 
   .hero-command__text {
     font-size: 1.05rem;
+    line-height: 1.35;
+    word-break: break-word;
   }
 }
