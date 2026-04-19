@@ -457,7 +457,7 @@ h1 {
 
 .hero-media {
   position: relative;
-  z-index: 1;
+  z-index: 3;
   margin-top: 18px;
   min-height: 320px;
   display: grid;
@@ -466,6 +466,7 @@ h1 {
 
 .hero-portrait-shell {
   position: relative;
+  z-index: 2;
   width: min(100%, 330px);
   aspect-ratio: 0.82;
   border-radius: 42px;
@@ -502,7 +503,7 @@ h1 {
 
 .hero-float {
   position: absolute;
-  z-index: 2;
+  z-index: 6;
   max-width: 220px;
   padding: 14px 16px;
   border-radius: 22px;
@@ -578,6 +579,8 @@ h1 {
 }
 
 .hero-command-marquee {
+  position: relative;
+  z-index: 2;
   overflow: hidden;
   padding: 14px 0;
   background: linear-gradient(90deg, rgba(255, 178, 91, 0.06), rgba(82, 216, 255, 0.05));
@@ -608,7 +611,7 @@ h1 {
 
 .hero-command-featured {
   margin-top: 14px;
-  z-index: 3;
+  z-index: 2;
   background: rgba(7, 16, 28, 0.78);
   backdrop-filter: blur(8px);
 }
