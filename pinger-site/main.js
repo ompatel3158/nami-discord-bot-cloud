@@ -183,6 +183,12 @@ function restartCommandRotation() {
     window.clearInterval(autoRotateTimer);
   }
 
+  // Disable auto-rotation on mobile devices to reduce CPU usage
+  const isMobile = window.innerWidth <= 760;
+  if (isMobile) {
+    return;
+  }
+
   autoRotateTimer = window.setInterval(() => {
     activeCommandIndex = (activeCommandIndex + 1) % commandGroups.length;
     updateCommandStage();
@@ -368,6 +374,11 @@ function setupHeroMotion() {
 
 function setupHeroMarquee() {
   if (!heroCommandTrack || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+
+  // Skip marquee setup on mobile for better performance
+  if (window.innerWidth <= 760) {
     return;
   }
 
