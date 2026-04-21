@@ -307,6 +307,7 @@ async function runStatusCheck() {
   });
 
   checkStatusBtn.disabled = true;
+  checkStatusBtn.textContent = "Checking...";
 
   try {
     const { response, payload, bodyText } = await callStatusApi({ instant: true });
@@ -346,6 +347,7 @@ async function runStatusCheck() {
     });
   } finally {
     checkStatusBtn.disabled = false;
+    checkStatusBtn.textContent = "Refresh live stats";
   }
 }
 
