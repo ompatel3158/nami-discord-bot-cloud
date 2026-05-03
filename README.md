@@ -2,7 +2,7 @@
 
 Nami is a modular Discord bot built with `discord.js` and TypeScript.
 
-# Check Out :- url(https://ultimate-nami.vercel.app/)
+# Check Out :- ultimate-nami.vercel.app
 
 It supports:
 
