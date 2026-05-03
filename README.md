@@ -2,6 +2,8 @@
 
 Nami is a modular Discord bot built with `discord.js` and TypeScript.
 
+# Check Out :- url(https://ultimate-nami.vercel.app/)
+
 It supports:
 
 - AI Q&A through OpenRouter for smart mode and Ollama for uncensored mode
