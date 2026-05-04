@@ -24,7 +24,7 @@ export function splitMessage(text: string, limit = DISCORD_LIMIT): string[] {
     remaining = remaining.slice(slicePoint).trim();
   }
 
-  if (remaining.length > 0) {
+  if (remaining.trim().length > 0) {
     chunks.push(remaining);
   }
 

@@ -88,6 +88,9 @@ function deepClone<T>(value: T): T {
 }
 
 export class AppStorage {
+  /** In-memory cache — eliminates repeated full-file reads on every operation. */
+  private cache: StorageShape | null = null;
+
   constructor() {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.mkdirSync(AUDIO_DIR, { recursive: true });
@@ -98,15 +101,20 @@ export class AppStorage {
   }
 
   private read(): StorageShape {
+    if (this.cache) {
+      return this.cache;
+    }
+
     try {
       const raw = fs.readFileSync(STORAGE_FILE, "utf8");
       const parsed = JSON.parse(raw) as Partial<StorageShape>;
-      return {
+      this.cache = {
         guilds: parsed.guilds ?? {},
         users: parsed.users ?? {},
         conversations: parsed.conversations ?? {},
         ttsUsageDaily: parsed.ttsUsageDaily ?? {}
       };
+      return this.cache;
     } catch (error) {
       console.error("Storage file was unreadable; resetting to a clean store.", error);
 
@@ -118,12 +126,15 @@ export class AppStorage {
         // Best-effort backup only.
       }
 
+      this.cache = deepClone(EMPTY_STORAGE);
       this.write(EMPTY_STORAGE);
-      return deepClone(EMPTY_STORAGE);
+      return this.cache;
     }
   }
 
   private write(data: StorageShape): void {
+    // Update the in-memory cache immediately so subsequent reads don't re-parse.
+    this.cache = data;
     const tempFile = `${STORAGE_FILE}.tmp`;
     fs.writeFileSync(tempFile, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     fs.renameSync(tempFile, STORAGE_FILE);
@@ -291,6 +302,14 @@ export class AppStorage {
       characterCount: globalNextCharacters,
       updatedAt
     };
+
+    // Prune stale daily-usage keys so storage.json doesn't grow unboundedly (#5).
+    for (const key of Object.keys(store.ttsUsageDaily)) {
+      const keyDate = key.split(":")[0];
+      if (keyDate && keyDate < usageDate) {
+        delete store.ttsUsageDaily[key];
+      }
+    }
 
     this.write(store);
 

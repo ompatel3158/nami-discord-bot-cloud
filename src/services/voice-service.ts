@@ -34,6 +34,7 @@ interface VoiceSession {
 export class VoiceService {
   private readonly sessions = new Map<string, VoiceSession>();
   private readonly resolvedFfmpegPath = ffmpegPath as unknown as string | undefined;
+  private static readonly MAX_QUEUE_DEPTH = 20;
 
   async ensureConnection(member: GuildMember): Promise<void> {
     const voiceChannel = member.voice.channel;
@@ -93,6 +94,13 @@ export class VoiceService {
     const session = this.sessions.get(member.guild.id);
     if (!session) {
       throw new Error("I couldn't create a voice session for that server.");
+    }
+
+    if (session.queue.length >= VoiceService.MAX_QUEUE_DEPTH) {
+      console.warn(
+        `[Voice] Queue full (${VoiceService.MAX_QUEUE_DEPTH}) for guild ${member.guild.id}. Dropping item.`
+      );
+      return session.queue.length;
     }
 
     session.queue.push({ filePath, speed });

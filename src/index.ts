@@ -373,7 +373,30 @@ client.on(Events.MessageCreate, async (message) => {
 
         if (connectedChannelId && connectedChannelId === memberVoiceChannelId) {
           const cleaned = message.cleanContent.trim();
-          const spokenContent = cleaned || (message.attachments.size > 0 ? "sent an attachment" : "");
+
+          // Build a natural spoken description for attachments when there's no text,
+          // or when the message is only a bare URL (will be cleaned by preprocessText anyway)
+          let attachmentLabel = "";
+          if (message.attachments.size > 0) {
+            const counts = { image: 0, video: 0, audio: 0, file: 0 };
+            for (const att of message.attachments.values()) {
+              const ct = att.contentType ?? "";
+              if (ct.startsWith("image/")) counts.image++;
+              else if (ct.startsWith("video/")) counts.video++;
+              else if (ct.startsWith("audio/")) counts.audio++;
+              else counts.file++;
+            }
+            const parts: string[] = [];
+            if (counts.image > 0) parts.push(counts.image === 1 ? "an image" : `${counts.image} images`);
+            if (counts.video > 0) parts.push(counts.video === 1 ? "a video" : `${counts.video} videos`);
+            if (counts.audio > 0) parts.push(counts.audio === 1 ? "an audio file" : `${counts.audio} audio files`);
+            if (counts.file > 0) parts.push(counts.file === 1 ? "a file" : `${counts.file} files`);
+            attachmentLabel = `sent ${parts.join(" and ")}`;
+          }
+
+          const spokenContent = cleaned
+            ? (attachmentLabel ? `${cleaned}, with ${attachmentLabel.replace(/^sent /, "")}` : cleaned)
+            : attachmentLabel;
 
           if (spokenContent) {
             const preferences = await storage.getUserPreferences(message.author.id);

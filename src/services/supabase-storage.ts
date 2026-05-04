@@ -48,8 +48,15 @@ function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/** Guild settings are cached for 30 s — frequent reads, infrequent writes. */
+const GUILD_SETTINGS_TTL_MS = 30_000;
+/** User preferences are cached for 60 s — even more stable than guild settings. */
+const USER_PREFS_TTL_MS = 60_000;
+
 export class SupabaseStorage implements StorageProvider {
   private readonly client: SupabaseClient;
+  private readonly guildSettingsCache = new Map<string, { data: GuildSettings; expiresAt: number }>();
+  private readonly userPrefsCache = new Map<string, { data: UserPreferences; expiresAt: number }>();
 
   static isConfigured(config: AppConfig): boolean {
     return Boolean(config.supabaseUrl && config.supabaseServiceRoleKey);
@@ -87,6 +94,12 @@ export class SupabaseStorage implements StorageProvider {
   }
 
   async getGuildSettings(guildId: string): Promise<GuildSettings> {
+    // Return from cache if still fresh.
+    const cached = this.guildSettingsCache.get(guildId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return deepClone(cached.data);
+    }
+
     const { data, error } = await this.client
       .from("guild_settings")
       .select("guild_id,data,updated_at")
@@ -97,7 +110,9 @@ export class SupabaseStorage implements StorageProvider {
       throw new Error(`Failed to read guild settings from Supabase: ${error.message}`);
     }
 
-    return this.normalizeGuildSettings(data);
+    const settings = this.normalizeGuildSettings(data);
+    this.guildSettingsCache.set(guildId, { data: settings, expiresAt: Date.now() + GUILD_SETTINGS_TTL_MS });
+    return settings;
   }
 
   async saveGuildSettings(guildId: string, settings: GuildSettings): Promise<GuildSettings> {
@@ -114,6 +129,8 @@ export class SupabaseStorage implements StorageProvider {
       throw new Error(`Failed to write guild settings to Supabase: ${error.message}`);
     }
 
+    // Invalidate the cache immediately so the next read gets fresh data.
+    this.guildSettingsCache.delete(guildId);
     return deepClone(settings);
   }
 
@@ -127,6 +144,12 @@ export class SupabaseStorage implements StorageProvider {
   }
 
   async getUserPreferences(userId: string): Promise<UserPreferences> {
+    // Return from cache if still fresh.
+    const cached = this.userPrefsCache.get(userId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return deepClone(cached.data);
+    }
+
     const { data, error } = await this.client
       .from("user_preferences")
       .select("user_id,data,updated_at")
@@ -137,7 +160,9 @@ export class SupabaseStorage implements StorageProvider {
       throw new Error(`Failed to read user preferences from Supabase: ${error.message}`);
     }
 
-    return this.normalizeUserPreferences(data);
+    const prefs = this.normalizeUserPreferences(data);
+    this.userPrefsCache.set(userId, { data: prefs, expiresAt: Date.now() + USER_PREFS_TTL_MS });
+    return prefs;
   }
 
   async saveUserPreferences(userId: string, preferences: UserPreferences): Promise<UserPreferences> {
@@ -154,6 +179,8 @@ export class SupabaseStorage implements StorageProvider {
       throw new Error(`Failed to write user preferences to Supabase: ${error.message}`);
     }
 
+    // Invalidate the cache immediately so the next read gets fresh data.
+    this.userPrefsCache.delete(userId);
     return deepClone(preferences);
   }
 
@@ -206,22 +233,35 @@ export class SupabaseStorage implements StorageProvider {
       throw new Error(`Failed to append conversation to Supabase: ${insertError.message}`);
     }
 
-    const { data: rows, error: readError } = await this.client
+    // Count rows cheaply (no content payload) to decide whether pruning is needed.
+    const { count, error: countError } = await this.client
       .from("conversations")
-      .select("id,guild_id,user_id,role,content,created_at")
+      .select("id", { count: "exact", head: true })
       .eq("guild_id", guildId)
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .returns<ConversationRow[]>();
+      .eq("user_id", userId);
 
-    if (readError) {
-      throw new Error(`Failed to read conversation history from Supabase: ${readError.message}`);
+    if (countError) {
+      throw new Error(`Failed to count conversation rows in Supabase: ${countError.message}`);
     }
 
-    const history = rows ?? [];
-    if (history.length > limit) {
-      const staleIds = history.slice(limit).map((row) => row.id);
-      if (staleIds.length > 0) {
+    if (count !== null && count > limit) {
+      // Fetch only the IDs of the oldest excess rows — no content columns needed.
+      const excess = count - limit;
+      const { data: oldRows, error: idError } = await this.client
+        .from("conversations")
+        .select("id")
+        .eq("guild_id", guildId)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true })
+        .limit(excess)
+        .returns<Pick<ConversationRow, "id">[]>();
+
+      if (idError) {
+        throw new Error(`Failed to read stale conversation IDs from Supabase: ${idError.message}`);
+      }
+
+      if (oldRows && oldRows.length > 0) {
+        const staleIds = oldRows.map((row) => row.id);
         const { error: pruneError } = await this.client
           .from("conversations")
           .delete()
@@ -233,14 +273,8 @@ export class SupabaseStorage implements StorageProvider {
       }
     }
 
-    return history
-      .slice(0, limit)
-      .reverse()
-      .map((row) => ({
-        role: row.role,
-        content: row.content,
-        createdAt: row.created_at
-      }));
+    // Return the final window of history.
+    return this.getConversation(guildId, userId);
   }
 
   async clearConversation(guildId: string, userId?: string): Promise<number> {

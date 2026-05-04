@@ -1,6 +1,19 @@
 import { randomInt } from "node:crypto";
 import type { GuessGameState, ScrambleGameState, TriviaGameState } from "../types.js";
 
+/** Games idle longer than this are considered stale and will be silently replaced. */
+const GAME_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Cryptographically fair Fisher-Yates shuffle using crypto.randomInt. */
+function shuffleArray<T>(array: T[]): T[] {
+  const copy = [...array];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = randomInt(0, i + 1);
+    [copy[i], copy[j]] = [copy[j], copy[i]] as [T, T];
+  }
+  return copy;
+}
+
 const TRIVIA_BANK: Array<Omit<TriviaGameState, "startedAt">> = [
   {
     prompt: "Which planet is known as the Red Planet?",
@@ -96,7 +109,7 @@ export class GameService {
 
   getOrCreateTrivia(key: string): TriviaGameState {
     const current = this.triviaGames.get(key);
-    if (current) {
+    if (current && Date.now() - new Date(current.startedAt).getTime() < GAME_TTL_MS) {
       return current;
     }
 
@@ -139,15 +152,13 @@ export class GameService {
 
   getOrCreateScramble(key: string): ScrambleGameState {
     const current = this.scrambleGames.get(key);
-    if (current) {
+    if (current && Date.now() - new Date(current.startedAt).getTime() < GAME_TTL_MS) {
       return current;
     }
 
     const answer = SCRAMBLE_WORDS[randomInt(0, SCRAMBLE_WORDS.length)];
-    const scrambled = answer
-      .split("")
-      .sort(() => Math.random() - 0.5)
-      .join("");
+    // Use cryptographically fair Fisher-Yates shuffle instead of biased Math.random sort.
+    const scrambled = shuffleArray(answer.split("")).join("");
 
     const state: ScrambleGameState = {
       scrambled,

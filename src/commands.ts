@@ -1,3 +1,8 @@
+/**
+ * @deprecated DEAD CODE — This file is a legacy duplicate of bot-commands.ts.
+ * index.ts imports only from bot-commands.js; this file is never loaded at runtime.
+ * Safe to delete once confirmed unused by any build step or external tooling.
+ */
 import {
   ChannelType,
   PermissionFlagsBits,
