@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Nami favicon">
+  <defs>
+    <linearGradient id="seaSun" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffb25b" />
+      <stop offset="55%" stop-color="#ffd38e" />
+      <stop offset="100%" stop-color="#52d8ff" />
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="26" fill="#08111f" />
+  <rect x="7" y="7" width="82" height="82" rx="22" fill="url(#seaSun)" opacity="0.16" />
+  <path
+    d="M27 70V25h11l21 29V25h10v45H58L37 41v29H27Z"
+    fill="url(#seaSun)"
+  />
+</svg>

@@ -1,0 +1,30 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait random delay (1-10 seconds)
+        run: |
+          DELAY=$(( (RANDOM % 10) + 1 ))
+          echo "Waiting ${DELAY}s..."
+          sleep "${DELAY}"
+
+      - name: Send ping request
+        env:
+          TARGET_URL: https://nami-discord-bot.onrender.com/health
+        run: |
+          echo "Pinging ${TARGET_URL}"
+          STATUS=$(curl -sS -o /tmp/ping_body.txt -w "%{http_code}" "${TARGET_URL}")
+          echo "HTTP ${STATUS}"
+          tail -c 400 /tmp/ping_body.txt || true
+
+          if [ "${STATUS}" -ge 400 ]; then
+            echo "Request failed with HTTP ${STATUS}"
+            exit 1
+          fi

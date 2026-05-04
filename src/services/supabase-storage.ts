@@ -1,0 +1,361 @@
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  DEFAULT_GUILD_SETTINGS,
+  DEFAULT_USER_PREFERENCES,
+  type AppConfig
+} from "../config.js";
+import type { StorageProvider, TtsLimitCheckInput, TtsLimitCheckResult } from "../storage.js";
+import type {
+  ConversationMessage,
+  GuildSettings,
+  UserPreferences
+} from "../types.js";
+
+interface GuildSettingsRow {
+  guild_id: string;
+  data: GuildSettings;
+  updated_at?: string;
+}
+
+interface UserPreferencesRow {
+  user_id: string;
+  data: UserPreferences;
+  updated_at?: string;
+}
+
+interface ConversationRow {
+  id: number;
+  guild_id: string;
+  user_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+interface TtsUsageLimitRpcRow {
+  allowed: boolean;
+  reason: string | null;
+  usage_date: string;
+  user_request_count: number;
+  user_character_count: number;
+  guild_request_count: number;
+  guild_character_count: number;
+  global_request_count: number;
+  global_character_count: number;
+}
+
+function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** Guild settings are cached for 30 s — frequent reads, infrequent writes. */
+const GUILD_SETTINGS_TTL_MS = 30_000;
+/** User preferences are cached for 60 s — even more stable than guild settings. */
+const USER_PREFS_TTL_MS = 60_000;
+
+export class SupabaseStorage implements StorageProvider {
+  private readonly client: SupabaseClient;
+  private readonly guildSettingsCache = new Map<string, { data: GuildSettings; expiresAt: number }>();
+  private readonly userPrefsCache = new Map<string, { data: UserPreferences; expiresAt: number }>();
+
+  static isConfigured(config: AppConfig): boolean {
+    return Boolean(config.supabaseUrl && config.supabaseServiceRoleKey);
+  }
+
+  constructor(config: AppConfig) {
+    if (!config.supabaseUrl || !config.supabaseServiceRoleKey) {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required to use SupabaseStorage.");
+    }
+
+    this.client = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+  }
+
+  private normalizeGuildSettings(row: GuildSettingsRow | null): GuildSettings {
+    const merged = {
+      ...DEFAULT_GUILD_SETTINGS,
+      ...(row?.data ?? {})
+    } as GuildSettings;
+
+    return deepClone(merged);
+  }
+
+  private normalizeUserPreferences(row: UserPreferencesRow | null): UserPreferences {
+    const merged = {
+      ...DEFAULT_USER_PREFERENCES,
+      ...(row?.data ?? {})
+    } as UserPreferences;
+
+    return deepClone(merged);
+  }
+
+  async getGuildSettings(guildId: string): Promise<GuildSettings> {
+    // Return from cache if still fresh.
+    const cached = this.guildSettingsCache.get(guildId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return deepClone(cached.data);
+    }
+
+    const { data, error } = await this.client
+      .from("guild_settings")
+      .select("guild_id,data,updated_at")
+      .eq("guild_id", guildId)
+      .maybeSingle<GuildSettingsRow>();
+
+    if (error) {
+      throw new Error(`Failed to read guild settings from Supabase: ${error.message}`);
+    }
+
+    const settings = this.normalizeGuildSettings(data);
+    this.guildSettingsCache.set(guildId, { data: settings, expiresAt: Date.now() + GUILD_SETTINGS_TTL_MS });
+    return settings;
+  }
+
+  async saveGuildSettings(guildId: string, settings: GuildSettings): Promise<GuildSettings> {
+    const payload: GuildSettingsRow = {
+      guild_id: guildId,
+      data: deepClone(settings)
+    };
+
+    const { error } = await this.client
+      .from("guild_settings")
+      .upsert(payload, { onConflict: "guild_id" });
+
+    if (error) {
+      throw new Error(`Failed to write guild settings to Supabase: ${error.message}`);
+    }
+
+    // Invalidate the cache immediately so the next read gets fresh data.
+    this.guildSettingsCache.delete(guildId);
+    return deepClone(settings);
+  }
+
+  async updateGuildSettings(
+    guildId: string,
+    updater: (current: GuildSettings) => GuildSettings
+  ): Promise<GuildSettings> {
+    const current = await this.getGuildSettings(guildId);
+    const next = updater(current);
+    return this.saveGuildSettings(guildId, next);
+  }
+
+  async getUserPreferences(userId: string): Promise<UserPreferences> {
+    // Return from cache if still fresh.
+    const cached = this.userPrefsCache.get(userId);
+    if (cached && Date.now() < cached.expiresAt) {
+      return deepClone(cached.data);
+    }
+
+    const { data, error } = await this.client
+      .from("user_preferences")
+      .select("user_id,data,updated_at")
+      .eq("user_id", userId)
+      .maybeSingle<UserPreferencesRow>();
+
+    if (error) {
+      throw new Error(`Failed to read user preferences from Supabase: ${error.message}`);
+    }
+
+    const prefs = this.normalizeUserPreferences(data);
+    this.userPrefsCache.set(userId, { data: prefs, expiresAt: Date.now() + USER_PREFS_TTL_MS });
+    return prefs;
+  }
+
+  async saveUserPreferences(userId: string, preferences: UserPreferences): Promise<UserPreferences> {
+    const payload: UserPreferencesRow = {
+      user_id: userId,
+      data: deepClone(preferences)
+    };
+
+    const { error } = await this.client
+      .from("user_preferences")
+      .upsert(payload, { onConflict: "user_id" });
+
+    if (error) {
+      throw new Error(`Failed to write user preferences to Supabase: ${error.message}`);
+    }
+
+    // Invalidate the cache immediately so the next read gets fresh data.
+    this.userPrefsCache.delete(userId);
+    return deepClone(preferences);
+  }
+
+  async updateUserPreferences(
+    userId: string,
+    updater: (current: UserPreferences) => UserPreferences
+  ): Promise<UserPreferences> {
+    const current = await this.getUserPreferences(userId);
+    const next = updater(current);
+    return this.saveUserPreferences(userId, next);
+  }
+
+  async getConversation(guildId: string, userId: string): Promise<ConversationMessage[]> {
+    const { data, error } = await this.client
+      .from("conversations")
+      .select("id,guild_id,user_id,role,content,created_at")
+      .eq("guild_id", guildId)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: true })
+      .returns<ConversationRow[]>();
+
+    if (error) {
+      throw new Error(`Failed to read conversation history from Supabase: ${error.message}`);
+    }
+
+    return (data ?? []).map((row) => ({
+      role: row.role,
+      content: row.content,
+      createdAt: row.created_at
+    }));
+  }
+
+  async appendConversation(
+    guildId: string,
+    userId: string,
+    message: ConversationMessage,
+    limit = 40
+  ): Promise<ConversationMessage[]> {
+    const { error: insertError } = await this.client
+      .from("conversations")
+      .insert({
+        guild_id: guildId,
+        user_id: userId,
+        role: message.role,
+        content: message.content,
+        created_at: message.createdAt
+      });
+
+    if (insertError) {
+      throw new Error(`Failed to append conversation to Supabase: ${insertError.message}`);
+    }
+
+    // Count rows cheaply (no content payload) to decide whether pruning is needed.
+    const { count, error: countError } = await this.client
+      .from("conversations")
+      .select("id", { count: "exact", head: true })
+      .eq("guild_id", guildId)
+      .eq("user_id", userId);
+
+    if (countError) {
+      throw new Error(`Failed to count conversation rows in Supabase: ${countError.message}`);
+    }
+
+    if (count !== null && count > limit) {
+      // Fetch only the IDs of the oldest excess rows — no content columns needed.
+      const excess = count - limit;
+      const { data: oldRows, error: idError } = await this.client
+        .from("conversations")
+        .select("id")
+        .eq("guild_id", guildId)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true })
+        .limit(excess)
+        .returns<Pick<ConversationRow, "id">[]>();
+
+      if (idError) {
+        throw new Error(`Failed to read stale conversation IDs from Supabase: ${idError.message}`);
+      }
+
+      if (oldRows && oldRows.length > 0) {
+        const staleIds = oldRows.map((row) => row.id);
+        const { error: pruneError } = await this.client
+          .from("conversations")
+          .delete()
+          .in("id", staleIds);
+
+        if (pruneError) {
+          throw new Error(`Failed to prune old conversation rows in Supabase: ${pruneError.message}`);
+        }
+      }
+    }
+
+    // Return the final window of history.
+    return this.getConversation(guildId, userId);
+  }
+
+  async clearConversation(guildId: string, userId?: string): Promise<number> {
+    let countQuery = this.client
+      .from("conversations")
+      .select("id", { count: "exact", head: true })
+      .eq("guild_id", guildId);
+
+    let deleteQuery = this.client
+      .from("conversations")
+      .delete()
+      .eq("guild_id", guildId);
+
+    if (userId) {
+      countQuery = countQuery.eq("user_id", userId);
+      deleteQuery = deleteQuery.eq("user_id", userId);
+    }
+
+    const { count, error: countError } = await countQuery;
+    if (countError) {
+      throw new Error(`Failed to count conversation rows for clear: ${countError.message}`);
+    }
+
+    const { error: deleteError } = await deleteQuery;
+    if (deleteError) {
+      throw new Error(`Failed to clear conversation rows from Supabase: ${deleteError.message}`);
+    }
+
+    return count ?? 0;
+  }
+
+  async trackTtsUsageAndCheckLimit(input: TtsLimitCheckInput): Promise<TtsLimitCheckResult> {
+    const billableCharacters = Math.max(0, Math.floor(input.characters));
+
+    const { data, error } = await this.client.rpc("track_tts_usage_limit", {
+      p_usage_date: new Date().toISOString().slice(0, 10),
+      p_user_id: input.userId,
+      p_guild_id: input.guildId,
+      p_characters: billableCharacters,
+      p_user_request_limit: input.userRequestLimit ?? null,
+      p_user_character_limit: input.userCharacterLimit ?? null,
+      p_guild_request_limit: input.guildRequestLimit ?? null,
+      p_guild_character_limit: input.guildCharacterLimit ?? null,
+      p_global_request_limit: input.globalRequestLimit ?? null,
+      p_global_character_limit: input.globalCharacterLimit ?? null
+    });
+
+    if (error) {
+      throw new Error(`Failed to track TTS usage limits in Supabase: ${error.message}`);
+    }
+
+    const row = Array.isArray(data)
+      ? ((data[0] as TtsUsageLimitRpcRow | undefined) ?? undefined)
+      : (data as TtsUsageLimitRpcRow | undefined);
+
+    if (!row) {
+      throw new Error("Supabase TTS usage tracker returned no result row.");
+    }
+
+    return {
+      allowed: row.allowed,
+      reason: row.reason ?? undefined,
+      usageDate: row.usage_date,
+      user: {
+        requestCount: row.user_request_count,
+        characterCount: row.user_character_count,
+        requestLimit: input.userRequestLimit,
+        characterLimit: input.userCharacterLimit
+      },
+      guild: {
+        requestCount: row.guild_request_count,
+        characterCount: row.guild_character_count,
+        requestLimit: input.guildRequestLimit,
+        characterLimit: input.guildCharacterLimit
+      },
+      global: {
+        requestCount: row.global_request_count,
+        characterCount: row.global_character_count,
+        requestLimit: input.globalRequestLimit,
+        characterLimit: input.globalCharacterLimit
+      }
+    };
+  }
+}
