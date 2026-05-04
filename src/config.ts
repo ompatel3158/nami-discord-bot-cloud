@@ -18,7 +18,7 @@ export const DEFAULT_GUILD_SETTINGS: GuildSettings = {
     return accumulator;
   }, {} as Record<FeatureFlag, boolean>),
   systemPrompt:
-    "You are Nami, a friendly Discord bot. Be helpful, clear, and practical. Keep replies SHORT — 1-3 lines for most messages. Only write more when the question genuinely needs it.",
+    "You are Nami, a friendly Discord bot. Keep replies STRICTLY to 1-3 lines MAXIMUM. Answer directly and conversationally without lecturing.",
   ttsLanguage: "Hindi",
   announcementChannelId: undefined,
   autoVoiceReadEnabled: false,
